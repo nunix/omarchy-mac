@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Cycle through enabled workspaces plus one empty workspace, on the active
+# monitor. Hyprland does not wrap e+1/e-1 at the ends, so do it explicitly.
+set -eu
+
+direction=${1:?direction must be left or right}
+case "$direction" in
+  left)  step=-1 ;;
+  right) step=1 ;;
+  *) exit 2 ;;
+esac
+
+active_json=$(hyprctl activeworkspace -j)
+active=$(printf '%s\n' "$active_json" | jq -r '.id')
+monitor=$(printf '%s\n' "$active_json" | jq -r '.monitor')
+
+# An enabled workspace has at least one window. Add exactly one empty
+# workspace after the highest enabled one, capped at Hyprland's default limit
+# of 5. Empty gaps are not added (for example, 1,3,4 rather than 1..4).
+enabled=$(hyprctl workspaces -j | jq -r --arg monitor "$monitor" \
+  '[.[] | select(.monitor == $monitor and .id >= 1 and .id <= 5 and .windows > 0) | .id] | sort | .[]')
+max_enabled=$(printf '%s\n' "$enabled" | awk 'NF { max=$1 } END { print (max ? max : 1) }')
+next_empty=$((max_enabled + 1))
+
+candidates=$(printf '%s\n%s\n%s\n' "$enabled" "$next_empty" "$active" \
+  | awk '$1 >= 1 && $1 <= 5' | sort -n -u)
+
+[ -n "$candidates" ] || exit 0
+
+mapfile -t ids < <(printf '%s\n' "$candidates")
+count=${#ids[@]}
+index=0
+for n in "${!ids[@]}"; do
+  if [ "${ids[$n]}" = "$active" ]; then
+    index=$n
+    break
+  fi
+done
+
+next=$((index + step))
+[ "$next" -ge "$count" ] && next=0
+[ "$next" -lt 0 ] && next=$((count - 1))
+
+# Select by numeric ID, preserving Hyprland's workspace identity.
+# Hyprland 0.56 exposes dispatch through its Lua API.
+next_id=${ids[$next]}
+hyprctl eval "hl.dispatch(hl.dsp.focus({ workspace = \"${next_id}\" }))"
