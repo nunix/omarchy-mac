@@ -65,6 +65,8 @@ of these in `~/.config/hypr/input.lua` using the options shown above.
 
 Swiping horizontally with three fingers to change workspaces — the way you swipe between full-screen apps on macOS — is a toggle. Flip it on under _Trigger > Hardware > Touchpad Gestures_ (`Super + Ctrl + H`), or with `omarchy toggle touchpad gestures`. It's off by default and survives Hyprland reloads, like the other [toggles](13-toggles-idle-screensaver.md).
 
+The gesture uses a five-workspace carousel. Swiping past the last occupied workspace still opens the next empty workspace, but workspace 5 wraps back to workspace 1 instead of creating workspace 6. Swiping back from workspace 1 visits the empty workspace after the last occupied one, unless workspace 5 is already occupied.
+
 For other [touchpad gestures](https://wiki.hypr.land/Configuring/Advanced-and-Cool/Gestures/), such as swiping to move focus, add them to `~/.config/hypr/input.lua`:
 
 ```lua

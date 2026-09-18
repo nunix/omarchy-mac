@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# omarchy:hidden=true
+# omarchy:summary=Switch through the five-workspace touchpad carousel
+# omarchy:args=<next|previous>
+
+set -euo pipefail
+
+MAX_WORKSPACE=5
+
+usage() {
+  echo "Usage: omarchy-hyprland-workspace-carousel <next|previous>" >&2
+}
+
+if (($# != 1)); then
+  usage
+  exit 1
+fi
+
+direction="$1"
+case "$direction" in
+  next|previous) ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
+
+active_workspace=$(hyprctl activeworkspace -j)
+current_workspace=$(jq -er '.id | numbers' <<<"$active_workspace")
+monitor=$(jq -er '.monitor | strings' <<<"$active_workspace")
+
+last_active_workspace=$(hyprctl workspaces -j | jq -er --arg monitor "$monitor" --argjson max "$MAX_WORKSPACE" '
+  [
+    .[]
+    | select(
+        .monitor == $monitor
+        and (.id | type) == "number"
+        and .id >= 1
+        and .id <= $max
+        and (.windows // 0) > 0
+      )
+    | .id
+  ]
+  | max // 1
+')
+
+# Keep one empty workspace after the highest occupied workspace, while making
+# workspace 5 the hard end of the carousel. This preserves Hyprland's useful
+# "last occupied workspace, then one empty workspace" swipe behavior without
+# allowing the gesture to create workspace 6.
+if ((last_active_workspace < MAX_WORKSPACE)); then
+  carousel_last=$((last_active_workspace + 1))
+else
+  carousel_last=$MAX_WORKSPACE
+fi
+
+case "$direction" in
+  next)
+    if ((current_workspace < 1 || current_workspace >= carousel_last)); then
+      target_workspace=1
+    else
+      target_workspace=$((current_workspace + 1))
+    fi
+    ;;
+  previous)
+    if ((current_workspace <= 1)); then
+      target_workspace=$carousel_last
+    else
+      target_workspace=$((current_workspace - 1))
+    fi
+    ;;
+esac
+
+hyprctl dispatch "hl.dsp.focus({ workspace = \"$target_workspace\", on_current_monitor = true })"
