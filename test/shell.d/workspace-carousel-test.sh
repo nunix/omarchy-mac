@@ -47,6 +47,12 @@ workspaces_1_to_5='[
   {"id":4,"name":"4","monitor":"eDP-1","windows":1},
   {"id":5,"name":"5","monitor":"eDP-1","windows":1}
 ]'
+workspaces_1_to_3_and_6='[
+  {"id":1,"name":"1","monitor":"eDP-1","windows":1},
+  {"id":2,"name":"2","monitor":"eDP-1","windows":1},
+  {"id":3,"name":"3","monitor":"eDP-1","windows":1},
+  {"id":6,"name":"6","monitor":"eDP-1","windows":1}
+]'
 
 run_carousel() {
   local direction="$1"
@@ -78,6 +84,11 @@ assert_target previous 1 "$workspaces_1_to_3" 4
 assert_target next 4 "$workspaces_1_to_3" 1
 assert_target previous 1 "$workspaces_1_to_5" 5
 assert_target next 5 "$workspaces_1_to_5" 1
+assert_target previous 1 "$workspaces_1_to_3_and_6" 6
+assert_target next 3 "$workspaces_1_to_3_and_6" 4
+assert_target next 4 "$workspaces_1_to_3_and_6" 6
+assert_target previous 6 "$workspaces_1_to_3_and_6" 4
+assert_target next 6 "$workspaces_1_to_3_and_6" 1
 
 set +e
 PATH="$stub_dir:$PATH" "$ROOT/bin/omarchy-hyprland-workspace-carousel" sideways >/dev/null 2>&1

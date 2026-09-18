@@ -30,46 +30,75 @@ active_workspace=$(hyprctl activeworkspace -j)
 current_workspace=$(jq -er '.id | numbers' <<<"$active_workspace")
 monitor=$(jq -er '.monitor | strings' <<<"$active_workspace")
 
-last_active_workspace=$(hyprctl workspaces -j | jq -er --arg monitor "$monitor" --argjson max "$MAX_WORKSPACE" '
-  [
-    .[]
-    | select(
-        .monitor == $monitor
-        and (.id | type) == "number"
-        and .id >= 1
-        and .id <= $max
-        and (.windows // 0) > 0
-      )
-    | .id
-  ]
-  | max // 1
-')
+# Keep every occupied workspace, including a manually created workspace above
+# the five-workspace limit. Within workspaces 1..5, add only the first empty
+# slot after the last occupied workspace. This prevents a run of empty slots
+# from making the carousel stop at the first one while still preserving one
+# empty workspace for new windows.
+mapfile -t carousel_workspaces < <(
+  hyprctl workspaces -j | jq -r --arg monitor "$monitor" --argjson max "$MAX_WORKSPACE" '
+    [
+      .[]
+      | select(
+          .monitor == $monitor
+          and (.id | type) == "number"
+          and .id >= 1
+          and (.windows // 0) > 0
+        )
+      | .id
+    ]
+    | unique as $occupied
+    | ([1] + $occupied | unique) as $with_first
+    | ([ $with_first[] | select(. <= $max) ] | max // 1) as $last_base
+    | (
+        if $last_base < $max and (($with_first | index($last_base + 1)) | not)
+        then [$last_base + 1]
+        else []
+        end
+      ) as $empty
+    | ($with_first + $empty | unique | sort | .[])
+  '
+)
 
-# Keep one empty workspace after the highest occupied workspace, while making
-# workspace 5 the hard end of the carousel. This preserves Hyprland's useful
-# "last occupied workspace, then one empty workspace" swipe behavior without
-# allowing the gesture to create workspace 6.
-if ((last_active_workspace < MAX_WORKSPACE)); then
-  carousel_last=$((last_active_workspace + 1))
-else
-  carousel_last=$MAX_WORKSPACE
+if ((${#carousel_workspaces[@]} == 0)); then
+  carousel_workspaces=(1)
 fi
 
-case "$direction" in
-  next)
-    if ((current_workspace < 1 || current_workspace >= carousel_last)); then
-      target_workspace=1
-    else
-      target_workspace=$((current_workspace + 1))
-    fi
-    ;;
-  previous)
-    if ((current_workspace <= 1)); then
-      target_workspace=$carousel_last
-    else
-      target_workspace=$((current_workspace - 1))
-    fi
-    ;;
-esac
+current_index=-1
+for index in "${!carousel_workspaces[@]}"; do
+  if ((carousel_workspaces[index] == current_workspace)); then
+    current_index=$index
+    break
+  fi
+done
 
+if ((current_index >= 0)); then
+  if [[ $direction == next ]]; then
+    target_index=$(((current_index + 1) % ${#carousel_workspaces[@]}))
+  else
+    target_index=$(((current_index - 1 + ${#carousel_workspaces[@]}) % ${#carousel_workspaces[@]}))
+  fi
+else
+  # A manually selected empty workspace may not be in the carousel. Insert it
+  # numerically without making it part of the persistent carousel state.
+  target_index=-1
+  if [[ $direction == next ]]; then
+    for index in "${!carousel_workspaces[@]}"; do
+      if ((carousel_workspaces[index] > current_workspace)); then
+        target_index=$index
+        break
+      fi
+    done
+    ((target_index >= 0)) || target_index=0
+  else
+    for index in "${!carousel_workspaces[@]}"; do
+      if ((carousel_workspaces[index] < current_workspace)); then
+        target_index=$index
+      fi
+    done
+    ((target_index >= 0)) || target_index=$((${#carousel_workspaces[@]} - 1))
+  fi
+fi
+
+target_workspace=${carousel_workspaces[target_index]}
 hyprctl dispatch "hl.dsp.focus({ workspace = \"$target_workspace\", on_current_monitor = true })"
