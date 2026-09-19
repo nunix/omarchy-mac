@@ -1414,7 +1414,7 @@ EOF
   fi
 
   DISK_OPTIONS=""
-  for size in 32 64 128 256 512; do
+  for size in 32 64 120 128 256 512; do
     if ((size <= MAX_DISK_GB)); then
       DISK_OPTIONS="$DISK_OPTIONS ${size}G"
     fi
