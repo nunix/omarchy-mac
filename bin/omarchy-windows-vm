@@ -1154,21 +1154,15 @@ write_credentials() {
   umask "$old_umask"
 }
 
-remmina_encrypt_password() {
-  local password="$1" encrypted
-  encrypted=$(printf '%s\n' "$password" |
-    remmina --encrypt-password 2>/dev/null |
-    sed -n 's/^Encrypted password: //p' | head -n1) || true
-  [[ -n $encrypted ]] || return 1
-  printf '%s\n' "$encrypted"
-}
-
+# Remmina encrypts password settings when it saves a profile. Keep the initial
+# profile private (0600) and plain so Remmina can load it before a secret-service
+# entry exists; a failed secret lookup otherwise leaves a literal "." password
+# and prompts on every launch.
 write_remmina_profile() {
-  local username="$1" password="$2" dir tmp encrypted old_umask
+  local username="$1" password="$2" dir tmp old_umask
   dir=$(dirname -- "$REMMINA_PROFILE")
   mkdir -p "$dir" || return 1
   chmod 0700 "$dir" || return 1
-  encrypted=$(remmina_encrypt_password "$password") || return 1
   old_umask=$(umask)
   umask 077
   tmp=$(mktemp "$dir/.omarchy-windows-vm.XXXXXX") || {
@@ -1181,7 +1175,7 @@ name=Omarchy Windows VM (RDP)
 protocol=RDP
 server=127.0.0.1:3389
 username=$username
-password=$encrypted
+password=$password
 resolution_mode=2
 scale=2
 quality=9

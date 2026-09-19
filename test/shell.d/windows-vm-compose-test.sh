@@ -144,7 +144,7 @@ grep -q '^scale=2$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile does not re
 grep -q '^quality=9$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile does not request best local quality"
 grep -q '^network=lan$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile does not select the LAN performance mode"
 grep -q '^multitransport=1$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile does not enable RDP multitransport"
-grep -q '^password=test-encrypted$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile password was not encrypted"
+grep -q '^password=s3cret$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile password was not written"
 pass "Remmina profile is private and targets the local RDP console"
 
 for action in write_compose docker_start up up_wait down status remove; do
