@@ -1,8 +1,27 @@
 # Windows VM
 
-Omarchy offers an easy way to run Windows through a Docker VM. You can install it using _Install > Windows_ from the Omarchy menu (`Super + Space`).
+Omarchy offers an easy way to run Windows through a Docker VM. You can install it using _Install > Windows_ from the Omarchy menu (`Super + Space`). On Apple Silicon, the installer uses the ARM64 Dockur image instead of trying to start an x86 Windows VM.
 
-Your machine needs KVM virtualization for this, which most do — but it's sometimes switched off in the BIOS, and the installer will tell you if that's the case. You'll also want the disk space: whatever you give Windows, plus about 10GB for the image itself.
+Your machine needs KVM virtualization for this, which most do — but it's sometimes unavailable in the kernel, and the installer will tell you if that's the case. You'll also want the disk space: whatever you give Windows, plus about 10GB for the image itself.
+
+## Prerequisites
+
+The host needs both the kernel KVM device and QEMU/Docker userspace. On an Arch-based install, the packages are:
+
+```bash
+omarchy pkg add qemu-base docker docker-compose
+```
+
+The installer checks these automatically and installs them along with FreeRDP and the terminal UI dependencies. You can verify the important pieces manually with:
+
+```bash
+ls -l /dev/kvm
+qemu-system-aarch64 --version   # Apple Silicon / ARM64
+```
+
+On x86_64, use `qemu-system-x86_64` instead. KVM is the kernel acceleration interface; QEMU is the userspace virtual machine process. The Docker container receives `/dev/kvm` and runs the architecture-matched Windows image.
+
+If `~/.windows` is on Btrfs, the installer marks the storage directory NOCOW before creating the virtual disk. Dockur warns about Btrfs because copy-on-write can upset Windows Setup; if setup still fails, put the VM storage on ext4 or XFS.
 
 The installer asks how much RAM, how many CPU cores, and how much disk to hand over (64GB or more is the sensible floor), then for a Windows username and password. Leave those blank and you get `docker` / `admin`. The download takes a while — 10-15 minutes is normal — and you can follow the progress in the browser at `http://127.0.0.1:8006`. The browser prompts for the same username and password before opening the console.
 
@@ -38,12 +57,12 @@ The VM's ports are bound to localhost only, so nothing on your network can reach
 
 ## Limits and licensing
 
-There's no GPU passthrough with this setup, so it's not suitable for gaming or video editing. It's a great way to run Microsoft Office or whatever else you absolutely must have.
+There's no Apple GPU passthrough with this setup, so it's not suitable for gaming or video editing. On Apple Silicon the guest is native ARM64 Windows and uses KVM for CPU acceleration, with a virtual display adapter. It's a great way to run Microsoft Office or whatever else you absolutely must have.
 
 The version installed is Windows 11 Pro, unactivated. You'll need your own license key to use the gated features.
 
 If this computer shipped with Windows, the OEM key is still in firmware even after installing Omarchy. Print it with `omarchy windows key`. That key is bound to this machine — it will activate Windows reinstalled on this hardware, but it usually will not activate the VM.
 
-You can change the resource allocation later by re-running `omarchy-windows-vm install`, which rewrites the VM's configuration from your answers. The compose file itself now lives at `/var/lib/omarchy/windows/docker-compose.yml` and is owned by root — that is deliberate, so a process running as you cannot rewrite it and have the privileged bring-up mount your whole disk into the container. If you need to hand-edit it (for example to mount a USB device), edit it with `sudo` and see all the options on [the Dockur Windows project](https://github.com/dockur/windows).
+You can change the resource allocation later by re-running `omarchy-windows-vm install`, which rewrites the VM's configuration from your answers. The compose file itself now lives at `/var/lib/omarchy/windows/docker-compose.yml` and is owned by root — that is deliberate, so a process running as you cannot rewrite it and have the privileged bring-up mount your whole disk into the container. If you need to hand-edit it (for example to mount a USB device), edit it with `sudo` and see all the options on the [Dockur Windows project](https://github.com/dockur/windows). The ARM64 image is documented at [dockur/windows-arm](https://github.com/dockur/windows-arm).
 
 To get rid of the whole thing, use _Remove > Windows_ from the Omarchy menu. That deletes the VM's disk and all its data, so make sure anything you care about is out of `~/Windows` first.

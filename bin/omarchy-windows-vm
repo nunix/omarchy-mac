@@ -1,32 +1,25 @@
 #!/bin/bash
-# omarchy:summary=Set up a Windows VM (unsupported on Apple Silicon)
+# omarchy:summary=Set up a Windows VM using QEMU/KVM
+# omarchy:args=[install|remove|launch|stop|status|help] [options]
 
-# Check for ARM64 architecture first
 ARCH=$(uname -m)
-if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-  cat << 'EOF'
-
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║   ⚠️  Windows VM Not Supported on Apple Silicon/ARM64        ║
-║                                                               ║
-║   The Windows VM feature requires x86_64 architecture.        ║
-║   Apple Silicon Macs use ARM64 which cannot efficiently       ║
-║   run x86 Windows without extreme performance penalties.      ║
-║                                                               ║
-║   Alternatives for Apple Silicon:                             ║
-║   • Parallels Desktop (commercial, ARM Windows support)       ║
-║   • VMware Fusion (free for personal use)                     ║
-║   • UTM (free, open source, uses QEMU)                        ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-
-EOF
-  echo "Current architecture: $ARCH"
-  echo "This feature is only available on x86_64 systems."
-  echo
+case "$ARCH" in
+x86_64)
+  IMAGE=dockurr/windows
+  QEMU_COMMAND=qemu-system-x86_64
+  WINDOWS_ARCH=x86_64
+  ;;
+aarch64 | arm64)
+  IMAGE=dockurr/windows-arm
+  QEMU_COMMAND=qemu-system-aarch64
+  WINDOWS_ARCH=arm64
+  ;;
+*)
+  echo "omarchy-windows-vm: unsupported host architecture: $ARCH" >&2
+  echo "Supported architectures are x86_64 and ARM64." >&2
   exit 1
-fi
+  ;;
+esac
 
 # The Windows VM runs a privileged container (KVM, /dev/net/tun, NET_ADMIN), so
 # it needs the root-owned Docker daemon. By default the user is NOT in the docker
@@ -50,7 +43,6 @@ LEGACY_COMPOSE_FILE="$HOME/.config/windows/docker-compose.yml"
 # docker group), but RDP needs it as the user. Keep a private copy here, 0600 in
 # the user's own config, so the plaintext password is never world-readable.
 CREDENTIALS_FILE="$HOME/.config/windows/credentials"
-IMAGE="dockurr/windows"
 CONTAINER="omarchy-windows"
 VM_LOCK_DIR=/run/lock/omarchy-windows-vm
 # Removal is the only path that recursively proves there are no bind aliases.
@@ -170,7 +162,7 @@ valid_password() { [[ $1 =~ ^[[:print:]]{1,64}$ ]]; }
 # ../tmp/evil from running an arbitrary file as root.
 valid_priv_action() {
   case "$1" in
-  write_compose | up | up_wait | down | status | remove) return 0 ;;
+  write_compose | docker_start | up | up_wait | down | status | remove) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -732,6 +724,7 @@ services:
       USERNAME: "$username"
       PASSWORD: "$esc_password"
       PROTECT: "Y"
+      VGA: "ramfb"
       TZ: "$tz"
       ARGUMENTS: "-rtc base=localtime,clock=host,driftfix=slew"
     devices:
@@ -917,6 +910,8 @@ assert_mounts_safe() {
   }
 }
 
+__priv_docker_start() { systemctl start docker; }
+
 __priv_up() { assert_mounts_safe && dc up -d; }
 
 __priv_down() { dc down; }
@@ -1040,6 +1035,16 @@ prepare_user_mount_sources() {
     return 1
   }
   chmod 0700 -- "$storage" "$shared"
+
+  # Dockur warns about copy-on-write storage during Windows Setup. Mark a
+  # Btrfs storage directory NOCOW before the container creates its disk image;
+  # this is best effort because some test filesystems do not support chattr.
+  local storage_fs
+  storage_fs=$(findmnt -no FSTYPE --target "$storage" 2>/dev/null || true)
+  if [[ $storage_fs == btrfs ]] && omarchy-cmd-present chattr; then
+    chattr +C -- "$storage" 2>/dev/null ||
+      echo "omarchy-windows-vm: warning: could not mark Btrfs storage NOCOW" >&2
+  fi
 }
 
 storage_space_path() {
@@ -1151,21 +1156,35 @@ check_prerequisites() {
   local DISK_SIZE_GB=${1:-64}
   local REQUIRED_SPACE=$((DISK_SIZE_GB + 10)) # Add 10GB for Windows ISO and overhead
 
-  # Check for KVM support
   if [[ ! -e /dev/kvm ]]; then
     gum style \
       --border normal \
       --padding "1 2" \
       --margin "1" \
-      "❌ KVM virtualization not available!" \
+      "❌ KVM virtualization is not available" \
       "" \
-      "Please enable virtualization in BIOS or run:" \
-      "  sudo modprobe kvm-intel  # for Intel CPUs" \
-      "  sudo modprobe kvm-amd    # for AMD CPUs"
+      "The Linux kernel must expose /dev/kvm." \
+      "Install the host prerequisites with:" \
+      "  omarchy pkg add qemu-base docker docker-compose freerdp gum" \
+      "" \
+      "If /dev/kvm is still missing, this kernel or platform does not provide KVM."
     exit 1
   fi
 
-  # Check disk space
+  local command
+  for command in docker docker-compose "$QEMU_COMMAND" xfreerdp3 gum; do
+    if ! omarchy-cmd-present "$command"; then
+      echo "❌ Required command is missing: $command" >&2
+      echo "   Install the host prerequisites with: omarchy pkg add qemu-base docker docker-compose freerdp gum" >&2
+      exit 1
+    fi
+  done
+
+  [[ -e /dev/net/tun ]] || {
+    echo "❌ /dev/net/tun is missing; Docker networking cannot be configured." >&2
+    exit 1
+  }
+
   AVAILABLE_SPACE=$(available_storage_gb) || {
     echo "❌ Could not determine available space for $HOME/.windows" >&2
     exit 1
@@ -1178,6 +1197,19 @@ check_prerequisites() {
   fi
 }
 
+ensure_docker_service() {
+  if systemctl is-active --quiet docker; then
+    return 0
+  fi
+
+  echo "Starting Docker daemon..."
+  priv docker_start || {
+    echo "❌ Could not start the Docker daemon." >&2
+    echo "   Try: sudo systemctl start docker" >&2
+    return 1
+  }
+}
+
 # --- commands ----------------------------------------------------------------
 
 install_windows() {
@@ -1185,9 +1217,12 @@ install_windows() {
   trap "echo ''; echo 'Installation cancelled by user'; exit 1" INT
 
   prepare_user_mount_sources || exit 1
-  check_prerequisites
 
-  omarchy-pkg-add freerdp openbsd-netcat gum
+  # The Dockurr container supplies the guest QEMU process, while the host still
+  # needs the QEMU/KVM userspace and Docker runtime to expose /dev/kvm.
+  omarchy-pkg-add qemu-base docker docker-compose freerdp openbsd-netcat gum || exit 1
+  check_prerequisites
+  ensure_docker_service || exit 1
 
   mkdir -p "$HOME/.local/share/applications"
 
@@ -1209,6 +1244,8 @@ EOF
 
   echo ""
   echo "System Resources Detected:"
+  echo "  Host architecture: $ARCH"
+  echo "  Windows architecture: $WINDOWS_ARCH"
   echo "  Total RAM: $TOTAL_RAM"
   echo "  Total CPU Cores: $TOTAL_CORES"
   echo ""
@@ -1420,6 +1457,12 @@ launch_windows() {
     fi
   fi
 
+  # The root-owned compose is intentionally unreadable to ordinary users.
+  # Launch only needs the runtime/device checks, not the install-time disk
+  # reservation calculation.
+  check_prerequisites 0 || exit 1
+  ensure_docker_service || exit 1
+
   # RDP credentials come from the private per-user file. Fall back to the compose
   # only when it is readable (sudoless mode), reversing the writer's escaping.
   WIN_USER=$(read_credential USERNAME) || WIN_USER=""
@@ -1614,4 +1657,5 @@ help | --help | -h | "")
   ;;
 esac
 
-# Note: If we get here, it means the user ran the script successfully on x86_64
+# The selected Dockurr image follows the host architecture: x64 on x86_64,
+# ARM64 on Apple Silicon and other aarch64 hosts.

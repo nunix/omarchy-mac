@@ -20,9 +20,9 @@ export OMARCHY_WINDOWS_DIR="$TMPDIR/win"
 export HOME="$TMPDIR/home"
 mkdir -p "$HOME"
 
-# The Mac fork's omarchy-windows-vm refuses aarch64 and exits, which would take
-# this test with it when sourced. The compose writer it pins is architecture
-# blind, so answer the gate rather than lose the coverage on Apple Silicon.
+# Keep the compose-writer test deterministic on every host. The helper selects
+# its image from uname, so answer x86_64 here and assert the corresponding image
+# below; the live Apple Silicon path is covered by the ARM64 branch logic.
 stub_bin="$TMPDIR/bin"
 mkdir -p "$stub_bin"
 cat >"$stub_bin/uname" <<'SH'
@@ -75,11 +75,12 @@ prepare_user_mount_sources
 write 4G 2 64G alice s3cret Europe/Copenhagen
 resolve_caller
 [[ -f $COMPOSE ]] || fail "writer produced a compose file"
-grep -q 'image: dockurr/windows' "$COMPOSE" || fail "image is pinned"
+grep -q 'image: dockurr/windows$' "$COMPOSE" || fail "x86_64 image is pinned"
 grep -q -- '- NET_ADMIN' "$COMPOSE" || fail "cap_add is pinned"
 grep -q -- "- $EXPECTED_STORAGE:/storage" "$COMPOSE" || fail "storage uses the protected anchor"
 grep -q -- "- $EXPECTED_SHARED:/shared" "$COMPOSE" || fail "shared uses the protected anchor"
 grep -q 'PROTECT: "Y"' "$COMPOSE" || fail "web console is not password protected"
+grep -q 'VGA: "ramfb"' "$COMPOSE" || fail "Windows display adapter is not pinned to ramfb"
 [[ ! -L $HOME/.windows && ! -L $HOME/Windows ]] || fail "fresh sources stay real directories"
 [[ $(stat -Lc '%d:%i' "$HOME/.windows") == $(stat -Lc '%d:%i' "$EXPECTED_STORAGE") ]] || fail "storage bind did not pin source"
 [[ $(stat -Lc '%d:%i' "$HOME/Windows") == $(stat -Lc '%d:%i' "$EXPECTED_SHARED") ]] || fail "shared bind did not pin source"
