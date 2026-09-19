@@ -1183,9 +1183,18 @@ server=127.0.0.1:3389
 username=$username
 password=$encrypted
 resolution_mode=2
+scale=2
+quality=9
+network=lan
+colordepth=99
+multitransport=1
+disable_fastpath=0
+disableclipboard=0
+cert_ignore=1
 ignore-tls-errors=1
 sound=off
 shareprinter=0
+window_maximize=1
 EOF
   then
     rm -f -- "$tmp"
