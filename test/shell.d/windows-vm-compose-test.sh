@@ -4,6 +4,22 @@
 set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
+if [[ ${OMARCHY_WINDOWS_TEST_NAMESPACE:-0} != 1 ]]; then
+  # Check target selection outside the user namespace. The namespace maps the
+  # packaged file's root ownership away, which would make this trust-boundary
+  # assertion fail for a reason unrelated to the command under test.
+  target_test_tmp=$(mktemp -d)
+  attack_bin="$target_test_tmp/bin"
+  mkdir -p "$attack_bin"
+  ln -s /bin/bash "$attack_bin/omarchy-windows-vm"
+  target=$(PATH="$attack_bin:$PATH" OMARCHY_PATH=/usr/share/omarchy /bin/bash -c \
+    'script=$1; set -- help; source "$script" >/dev/null 2>&1; priv_target' \
+    bash "$ROOT/bin/omarchy-windows-vm") || fail "packaged pkexec target was rejected"
+  [[ $target == /usr/bin/omarchy-windows-vm ]] || fail "PATH symlink became a privileged target: $target"
+  rm -rf "$target_test_tmp"
+  pass "pkexec target is only the canonical packaged regular file, never a PATH symlink"
+fi
+
 # Bind mounts need CAP_SYS_ADMIN in a private mount namespace. Keep the
 # caller's uid so the non-root development path is exercised.
 if [[ ${OMARCHY_WINDOWS_TEST_NAMESPACE:-0} != 1 ]]; then
@@ -18,6 +34,8 @@ fi
 TMPDIR=$(mktemp -d)
 export OMARCHY_WINDOWS_DIR="$TMPDIR/win"
 export HOME="$TMPDIR/home"
+# Test the packaged fallback below regardless of the host's dev-link state.
+export OMARCHY_PATH=/usr/share/omarchy
 mkdir -p "$HOME"
 
 # Keep the compose-writer test deterministic on every host. The helper selects
@@ -35,6 +53,17 @@ else
 fi
 SH
 chmod +x "$stub_bin/uname"
+cat >"$stub_bin/remmina" <<'SH'
+#!/bin/bash
+
+if [[ ${1:-} == --encrypt-password ]]; then
+  read -r password
+  printf 'Encrypted password: test-encrypted\n'
+else
+  exit 1
+fi
+SH
+chmod +x "$stub_bin/remmina"
 PATH="$stub_bin:$PATH"
 
 # Source the command's functions; the dispatcher just prints usage for "help".
@@ -75,7 +104,8 @@ prepare_user_mount_sources
 write 4G 2 64G alice s3cret Europe/Copenhagen
 resolve_caller
 [[ -f $COMPOSE ]] || fail "writer produced a compose file"
-grep -q 'image: dockurr/windows$' "$COMPOSE" || fail "x86_64 image is pinned"
+grep -q 'image: docker.io/dockurr/windows:latest$' "$COMPOSE" || fail "x86_64 image is pinned"
+grep -q 'VERSION: "11"' "$COMPOSE" || fail "x86_64 Windows edition is pinned"
 grep -q -- '- NET_ADMIN' "$COMPOSE" || fail "cap_add is pinned"
 grep -q -- "- $EXPECTED_STORAGE:/storage" "$COMPOSE" || fail "storage uses the protected anchor"
 grep -q -- "- $EXPECTED_SHARED:/shared" "$COMPOSE" || fail "shared uses the protected anchor"
@@ -104,28 +134,22 @@ grep -q 'PASSWORD: ".*\$\$.*"' "$COMPOSE" || fail "dollar not escaped"
 [[ $(unescape "$(read_compose_value PASSWORD "$COMPOSE")") == "$tricky" ]] || fail "password did not round-trip"
 pass "password with quote, backslash, and dollar round-trips"
 
-for action in write_compose up up_wait down status remove; do
+write_remmina_profile alice s3cret
+REMMINA_PROFILE_TEST="$HOME/.local/share/remmina/omarchy-windows-vm.remmina"
+[[ -f $REMMINA_PROFILE_TEST ]] || fail "Remmina profile was not written"
+[[ $(stat -c '%a' "$REMMINA_PROFILE_TEST") == 600 ]] || fail "Remmina profile is not private"
+grep -q '^protocol=RDP$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile does not select RDP"
+grep -q '^server=127.0.0.1:3389$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile does not target the VM RDP port"
+grep -q '^password=test-encrypted$' "$REMMINA_PROFILE_TEST" || fail "Remmina profile password was not encrypted"
+pass "Remmina profile is private and targets the local RDP console"
+
+for action in write_compose docker_start up up_wait down status remove; do
   valid_priv_action "$action" || fail "known action rejected: $action"
 done
 for action in '/../evil/x' bogus 'up;rm' '' '__priv_up'; do
   valid_priv_action "$action" && fail "action whitelist accepted: [$action]"
 done
 pass "privileged action dispatch is allowlisted"
-
-# A PATH symlink to bash must never become the pkexec target. Hide the packaged
-# file from priv_target's stat checks to exercise the historical fallback.
-attack_bin="$TMPDIR/attack-bin"
-mkdir -p "$attack_bin"
-ln -s /bin/bash "$attack_bin/omarchy-windows-vm"
-printf 'printf exploited >"$TMPDIR/exploited"\n' >"$TMPDIR/__priv"
-stat() {
-  [[ ${!#} == /usr/bin/omarchy-windows-vm ]] && return 1
-  command stat "$@"
-}
-PATH="$attack_bin:$PATH" priv_target >/dev/null 2>&1 && fail "PATH symlink became a privileged target"
-unset -f stat
-[[ ! -e $TMPDIR/exploited ]] || fail "attacker __priv script executed"
-pass "pkexec target is only the canonical packaged regular file, never a PATH symlink"
 
 # Legacy migration keeps directories and legitimate symlinks in place.
 reset_case

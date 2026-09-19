@@ -5,14 +5,18 @@
 ARCH=$(uname -m)
 case "$ARCH" in
 x86_64)
-  IMAGE=dockurr/windows
+  IMAGE=docker.io/dockurr/windows:latest
   QEMU_COMMAND=qemu-system-x86_64
   WINDOWS_ARCH=x86_64
+  WINDOWS_VERSION=11
+  WINDOWS_EDITION="Windows 11 Pro"
   ;;
 aarch64 | arm64)
-  IMAGE=dockurr/windows-arm
+  IMAGE=docker.io/dockurr/windows-arm:latest
   QEMU_COMMAND=qemu-system-aarch64
   WINDOWS_ARCH=arm64
+  WINDOWS_VERSION=11e
+  WINDOWS_EDITION="Windows 11 Enterprise Evaluation"
   ;;
 *)
   echo "omarchy-windows-vm: unsupported host architecture: $ARCH" >&2
@@ -43,6 +47,7 @@ LEGACY_COMPOSE_FILE="$HOME/.config/windows/docker-compose.yml"
 # docker group), but RDP needs it as the user. Keep a private copy here, 0600 in
 # the user's own config, so the plaintext password is never world-readable.
 CREDENTIALS_FILE="$HOME/.config/windows/credentials"
+REMMINA_PROFILE="$HOME/.local/share/remmina/omarchy-windows-vm.remmina"
 CONTAINER="omarchy-windows"
 VM_LOCK_DIR=/run/lock/omarchy-windows-vm
 # Removal is the only path that recursively proves there are no bind aliases.
@@ -72,25 +77,74 @@ docker_needs_sudo() { omarchy-sudo-docker; }
 
 # The command to hand pkexec for the privileged re-exec. pkexec runs whatever
 # executable it is given (after authorization) and only shows the path in the
-# prompt — it does NOT require the target to be root-owned. So resolve to the
-# packaged command and refuse to elevate anything a non-root user could have
-# written: a PATH-injected shim, or a user-owned dev checkout. Without this, a
-# prompt the user grants for the trusted helper could run an attacker's binary
-# as root. Fails closed (empty output) when no trustworthy target is found.
-priv_target() {
+# prompt. A packaged install therefore uses the canonical root-owned command.
+#
+# A dev link is an explicit decision to run Omarchy commands from a user-owned
+# checkout, including commands that need elevation. In that mode, use the
+# checkout's helper only when the exact canonical path is recorded in the
+# root-owned /etc/omarchy.conf. Without that check, a PATH or OMARCHY_PATH
+# override could turn the authorization prompt into arbitrary root execution.
+trusted_dev_target() {
+  local source_root=${OMARCHY_PATH:-} candidate config canonical owner mode size
+  local probe quoted_source_root expected_config_line
+  local -a config_lines
+  [[ -n $source_root && $source_root != /usr/share/omarchy && $source_root == /* ]] || return 1
+  source_root=$(/usr/bin/realpath -e -- "$source_root" 2>/dev/null) || return 1
+  candidate="$source_root/bin/omarchy-windows-vm"
+  [[ -f $candidate && ! -L $candidate && -x $candidate ]] || return 1
+  config=/etc/omarchy.conf
+  [[ -f $config && ! -L $config ]] || return 1
+  canonical=$(/usr/bin/realpath -e -- "$config" 2>/dev/null) || return 1
+  [[ $canonical == "$config" ]] || return 1
+  probe=$config
+  while :; do
+    owner=$(/usr/bin/stat -Lc '%u' "$probe" 2>/dev/null) || return 1
+    mode=$(/usr/bin/stat -Lc '%a' "$probe" 2>/dev/null) || return 1
+    [[ $owner == 0 ]] && ! ((8#$mode & 022)) || return 1
+    [[ $probe == / ]] && break
+    probe=$(/usr/bin/dirname -- "$probe")
+  done
+  owner=$(/usr/bin/stat -Lc '%u' "$config" 2>/dev/null) || return 1
+  mode=$(/usr/bin/stat -Lc '%a' "$config" 2>/dev/null) || return 1
+  size=$(/usr/bin/stat -Lc '%s' "$config" 2>/dev/null) || return 1
+  [[ $owner == 0 ]] && ! ((8#$mode & 022)) || return 1
+  (( size > 0 && size <= 4096 )) || return 1
+
+  quoted_source_root=$source_root
+  quoted_source_root=${quoted_source_root//\\/\\\\}
+  quoted_source_root=${quoted_source_root//\"/\\\"}
+  quoted_source_root=${quoted_source_root//\$/\\\$}
+  quoted_source_root=${quoted_source_root//\`/\\\`}
+  expected_config_line="export OMARCHY_PATH=\"$quoted_source_root\""
+  mapfile -t config_lines <"$config"
+  (( ${#config_lines[@]} == 1 )) || return 1
+  [[ ${config_lines[0]} == "$expected_config_line" ]] || return 1
+  printf '%s\n' "$candidate"
+}
+
+trusted_packaged_target() {
   local candidate=/usr/bin/omarchy-windows-vm canonical probe owner mode
   [[ -f $candidate && ! -L $candidate && -x $candidate ]] || return 1
-  canonical=$(realpath -e -- "$candidate" 2>/dev/null) || return 1
+  canonical=$(/usr/bin/realpath -e -- "$candidate" 2>/dev/null) || return 1
   [[ $canonical == "$candidate" ]] || return 1
   probe=$candidate
   while :; do
-    owner=$(stat -Lc '%u' "$probe" 2>/dev/null) || return 1
-    mode=$(stat -Lc '%a' "$probe" 2>/dev/null) || return 1
+    owner=$(/usr/bin/stat -Lc '%u' "$probe" 2>/dev/null) || return 1
+    mode=$(/usr/bin/stat -Lc '%a' "$probe" 2>/dev/null) || return 1
     [[ $owner == 0 ]] && ! ((8#$mode & 022)) || return 1
     [[ $probe == / ]] && break
-    probe=$(dirname -- "$probe")
+    probe=$(/usr/bin/dirname -- "$probe")
   done
   printf '%s\n' "$candidate"
+}
+
+priv_target() {
+  local target
+  if target=$(trusted_dev_target 2>/dev/null); then
+    printf '%s\n' "$target"
+  else
+    trusted_packaged_target
+  fi
 }
 
 # Run a privileged VM action. write_compose always elevates (the compose is
@@ -117,7 +171,7 @@ priv() {
   fi
   local target
   target=$(priv_target) || {
-    echo "omarchy-windows-vm: refusing to run a non-root-owned command as root" >&2
+    echo "omarchy-windows-vm: refusing to run without a trusted privileged helper" >&2
     return 1
   }
   pkexec "$target" __priv "$action" "$@"
@@ -717,7 +771,7 @@ services:
     image: $IMAGE
     container_name: $CONTAINER
     environment:
-      VERSION: "11"
+      VERSION: "$WINDOWS_VERSION"
       RAM_SIZE: "$ram"
       CPU_CORES: "$cores"
       DISK_SIZE: "$disk"
@@ -1100,6 +1154,52 @@ write_credentials() {
   umask "$old_umask"
 }
 
+remmina_encrypt_password() {
+  local password="$1" encrypted
+  encrypted=$(printf '%s\n' "$password" |
+    remmina --encrypt-password 2>/dev/null |
+    sed -n 's/^Encrypted password: //p' | head -n1) || true
+  [[ -n $encrypted ]] || return 1
+  printf '%s\n' "$encrypted"
+}
+
+write_remmina_profile() {
+  local username="$1" password="$2" dir tmp encrypted old_umask
+  dir=$(dirname -- "$REMMINA_PROFILE")
+  mkdir -p "$dir" || return 1
+  chmod 0700 "$dir" || return 1
+  encrypted=$(remmina_encrypt_password "$password") || return 1
+  old_umask=$(umask)
+  umask 077
+  tmp=$(mktemp "$dir/.omarchy-windows-vm.XXXXXX") || {
+    umask "$old_umask"
+    return 1
+  }
+  if ! cat >"$tmp" <<EOF
+[remmina]
+name=Omarchy Windows VM (RDP)
+protocol=RDP
+server=127.0.0.1:3389
+username=$username
+password=$encrypted
+resolution_mode=2
+ignore-tls-errors=1
+sound=off
+shareprinter=0
+EOF
+  then
+    rm -f -- "$tmp"
+    umask "$old_umask"
+    return 1
+  fi
+  if ! chmod 0600 "$tmp" || ! mv -fT -- "$tmp" "$REMMINA_PROFILE"; then
+    rm -f -- "$tmp"
+    umask "$old_umask"
+    return 1
+  fi
+  umask "$old_umask"
+}
+
 # Read one field from the private credentials file; IFS on the first = keeps a
 # password that itself contains =.
 read_credential() {
@@ -1220,7 +1320,7 @@ install_windows() {
 
   # The Dockurr container supplies the guest QEMU process, while the host still
   # needs the QEMU/KVM userspace and Docker runtime to expose /dev/kvm.
-  omarchy-pkg-add qemu-base docker docker-compose freerdp openbsd-netcat gum || exit 1
+  omarchy-pkg-add qemu-base docker docker-compose freerdp openbsd-netcat remmina gum || exit 1
   check_prerequisites
   ensure_docker_service || exit 1
 
@@ -1237,6 +1337,17 @@ Type=Application
 Categories=System;Virtualization;
 EOF
 
+  cat <<EOF | tee "$HOME/.local/share/applications/windows-vm-remmina.desktop" >/dev/null
+[Desktop Entry]
+Name=Windows (Remmina)
+Comment=Start Windows VM and connect with Remmina over RDP
+Exec=uwsm app -- omarchy-windows-vm launch --remmina
+Icon=windows
+Terminal=false
+Type=Application
+Categories=System;Virtualization;Network;
+EOF
+
   # Get system resources
   TOTAL_RAM=$(free -h | awk 'NR==2 {print $2}')
   TOTAL_RAM_GB=$(awk 'NR==1 {printf "%d", $2/1024/1024}' /proc/meminfo)
@@ -1246,6 +1357,7 @@ EOF
   echo "System Resources Detected:"
   echo "  Host architecture: $ARCH"
   echo "  Windows architecture: $WINDOWS_ARCH"
+  echo "  Windows edition: $WINDOWS_EDITION"
   echo "  Total RAM: $TOTAL_RAM"
   echo "  Total CPU Cores: $TOTAL_CORES"
   echo ""
@@ -1379,6 +1491,10 @@ EOF
     echo "❌ Failed to store private RDP credentials." >&2
     exit 1
   }
+  write_remmina_profile "$USERNAME" "$PASSWORD" || {
+    echo "❌ Failed to write the Remmina RDP profile." >&2
+    exit 1
+  }
 
   echo ""
   echo "Starting Windows VM installation..."
@@ -1437,6 +1553,8 @@ remove_windows() {
   fi
 
   rm -f "$HOME/.local/share/applications/windows-vm.desktop"
+  rm -f "$HOME/.local/share/applications/windows-vm-remmina.desktop"
+  rm -f "$REMMINA_PROFILE"
   rm -rf "$HOME/.config/windows"
   rm -rf "$HOME/.windows"
 
@@ -1446,8 +1564,11 @@ remove_windows() {
 
 launch_windows() {
   KEEP_ALIVE=false
-  if [[ $1 = "--keep-alive" ]] || [[ $1 = "-k" ]]; then
+  USE_REMMINA=false
+  if [[ ${1:-} = "--keep-alive" ]] || [[ ${1:-} = "-k" ]]; then
     KEEP_ALIVE=true
+  elif [[ ${1:-} = "--remmina" ]] || [[ ${1:-} = "-r" ]]; then
+    USE_REMMINA=true
   fi
 
   if ! migrate_legacy_compose; then
@@ -1499,33 +1620,45 @@ To stop: omarchy-windows-vm stop"
     "" \
     "$LIFECYCLE"
 
-  # FreeRDP 3 tries Kerberos before NTLM for NLA, and krb5 ships /etc/krb5.conf
-  # as the MIT sample with default_realm = ATHENA.MIT.EDU. Every connect then
-  # goes looking for MIT's KDC: with internet up it fails fast, but off the
-  # network each attempt blocks ~23s and no RDP window is ever drawn. The VM
-  # authenticates against a local Windows account, so point FreeRDP at a
-  # realm-less config and let it fall straight through to NTLM.
-  KRB5_CONF="$HOME/.config/windows/krb5.conf"
-  mkdir -p "$(dirname "$KRB5_CONF")"
-  if [[ ! -f $KRB5_CONF ]]; then
-    printf '[libdefaults]\n  dns_lookup_kdc = false\n  dns_lookup_realm = false\n' >"$KRB5_CONF"
+  if [[ $USE_REMMINA = "true" ]]; then
+    if ! omarchy-cmd-present remmina; then
+      echo "❌ Remmina is not installed. Run: omarchy pkg add remmina" >&2
+      exit 1
+    fi
+    [[ -f $REMMINA_PROFILE ]] || write_remmina_profile "$WIN_USER" "$WIN_PASS" || {
+      echo "❌ Failed to write the Remmina RDP profile." >&2
+      exit 1
+    }
+    remmina -c "$REMMINA_PROFILE"
+  else
+    # FreeRDP 3 tries Kerberos before NTLM for NLA, and krb5 ships /etc/krb5.conf
+    # as the MIT sample with default_realm = ATHENA.MIT.EDU. Every connect then
+    # goes looking for MIT's KDC: with internet up it fails fast, but off the
+    # network each attempt blocks ~23s and no RDP window is ever drawn. The VM
+    # authenticates against a local Windows account, so point FreeRDP at a
+    # realm-less config and let it fall straight through to NTLM.
+    KRB5_CONF="$HOME/.config/windows/krb5.conf"
+    mkdir -p "$(dirname "$KRB5_CONF")"
+    if [[ ! -f $KRB5_CONF ]]; then
+      printf '[libdefaults]\n  dns_lookup_kdc = false\n  dns_lookup_realm = false\n' >"$KRB5_CONF"
+    fi
+    export KRB5_CONFIG="$KRB5_CONF"
+
+    # Detect display scale from Hyprland
+    HYPR_SCALE=$(hyprctl monitors -j | jq -r '.[] | select (.focused == true) | .scale')
+    SCALE_PERCENT=$(echo "$HYPR_SCALE" | awk '{print int($1 * 100)}')
+
+    RDP_SCALE=""
+    if ((SCALE_PERCENT >= 170)); then
+      RDP_SCALE="/scale:180"
+    elif ((SCALE_PERCENT >= 130)); then
+      RDP_SCALE="/scale:140"
+    fi
+    # If scale is less than 130%, don't set any scale (use default 100)
+
+    # Connect with RDP in fullscreen (auto-detects resolution)
+    xfreerdp3 /u:"$WIN_USER" /p:"$WIN_PASS" /v:127.0.0.1:3389 -grab-keyboard /sound /microphone /clipboard /cert:ignore /title:"Windows VM - Omarchy" /dynamic-resolution /gfx:AVC444 /floatbar:sticky:off,default:visible,show:fullscreen $RDP_SCALE
   fi
-  export KRB5_CONFIG="$KRB5_CONF"
-
-  # Detect display scale from Hyprland
-  HYPR_SCALE=$(hyprctl monitors -j | jq -r '.[] | select (.focused == true) | .scale')
-  SCALE_PERCENT=$(echo "$HYPR_SCALE" | awk '{print int($1 * 100)}')
-
-  RDP_SCALE=""
-  if ((SCALE_PERCENT >= 170)); then
-    RDP_SCALE="/scale:180"
-  elif ((SCALE_PERCENT >= 130)); then
-    RDP_SCALE="/scale:140"
-  fi
-  # If scale is less than 130%, don't set any scale (use default 100)
-
-  # Connect with RDP in fullscreen (auto-detects resolution)
-  xfreerdp3 /u:"$WIN_USER" /p:"$WIN_PASS" /v:127.0.0.1:3389 -grab-keyboard /sound /microphone /clipboard /cert:ignore /title:"Windows VM - Omarchy" /dynamic-resolution /gfx:AVC444 /floatbar:sticky:off,default:visible,show:fullscreen $RDP_SCALE
 
   # After RDP closes, stop the container unless --keep-alive was specified
   if [[ $KEEP_ALIVE = "false" ]]; then
@@ -1605,6 +1738,7 @@ show_usage() {
   echo "  launch [options]     Start Windows VM (if needed) and connect via RDP"
   echo "                       Options:"
   echo "                         --keep-alive, -k   Keep VM running after RDP closes"
+  echo "                         --remmina, -r      Connect with the Remmina RDP profile"
   echo "  stop                 Stop the running Windows VM"
   echo "  status               Show current VM status"
   echo "  help                 Show this help message"
@@ -1613,6 +1747,7 @@ show_usage() {
   echo "  omarchy-windows-vm install           # Set up Windows VM for first time"
   echo "  omarchy-windows-vm launch            # Connect to VM (auto-stop on exit)"
   echo "  omarchy-windows-vm launch -k         # Connect to VM (keep running)"
+  echo "  omarchy-windows-vm launch --remmina  # Connect using Remmina"
   echo "  omarchy-windows-vm stop              # Shut down the VM"
 }
 
@@ -1657,5 +1792,5 @@ help | --help | -h | "")
   ;;
 esac
 
-# The selected Dockurr image follows the host architecture: x64 on x86_64,
-# ARM64 on Apple Silicon and other aarch64 hosts.
+# The selected Dockurr image and Windows edition follow the host architecture:
+# Pro on x86_64, Enterprise Evaluation on ARM64.

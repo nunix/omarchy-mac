@@ -7,13 +7,19 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 windows_vm_command="$ROOT/bin/omarchy-windows-vm"
 windows_vm_rules="$ROOT/default/hypr/apps/windows-vm.lua"
 
-rg -q 'IMAGE=dockurr/windows-arm' "$windows_vm_command" ||
-  fail "Windows VM selects the ARM64 Dockurr image"
+rg -q 'IMAGE=docker.io/dockurr/windows-arm:latest' "$windows_vm_command" ||
+  fail "Windows VM selects the tagged ARM64 Dockurr image"
+rg -q 'WINDOWS_VERSION=11e' "$windows_vm_command" ||
+  fail "Windows VM selects the ARM64 Enterprise Evaluation edition"
 rg -q 'QEMU_COMMAND=qemu-system-aarch64' "$windows_vm_command" ||
   fail "Windows VM checks for the ARM64 QEMU binary"
-rg -q 'omarchy-pkg-add qemu-base docker docker-compose' "$windows_vm_command" ||
-  fail "Windows VM installs the QEMU/KVM and Docker prerequisites"
-pass "Windows VM supports ARM64 with QEMU/KVM prerequisites"
+rg -q 'omarchy-pkg-add qemu-base docker docker-compose.*remmina' "$windows_vm_command" ||
+  fail "Windows VM installs the QEMU/KVM, Docker, and Remmina prerequisites"
+rg -q 'REMMINA_PROFILE=' "$windows_vm_command" ||
+  fail "Windows VM defines a Remmina connection profile"
+rg -q -- '--remmina' "$windows_vm_command" ||
+  fail "Windows VM exposes a Remmina launch option"
+pass "Windows VM uses the tagged ARM64 Enterprise Evaluation image and Remmina"
 
 rg -q '^    restart: "no"$' "$windows_vm_command" ||
   fail "Windows VM uses manual startup by default"
