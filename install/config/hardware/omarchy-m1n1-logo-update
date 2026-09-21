@@ -1,0 +1,95 @@
+#!/bin/sh
+# Rebuild the Asahi m1n1 payload with the Omarchy logo, then regenerate the
+# EFI boot image using the currently installed m1n1, device trees, and U-Boot.
+# The installer copies this file to a root-owned path before the pacman hook
+# uses it.
+
+set -eu
+umask 022
+
+BASE=/usr/lib/asahi-boot/m1n1.bin
+PAYLOAD=/usr/local/share/omarchy/m1n1-logo.payload
+STATE=/var/lib/omarchy/m1n1-logo
+CUSTOM=$STATE/m1n1-omarchy.bin
+BACKUP=$STATE/boot.bin.before-omarchy-logo
+PAYLOAD_SIZE=327696
+MAGIC=m1n1_logo_256128
+
+TMP=
+VERIFY=
+ESP_MOUNT=
+ESP_MOUNTED=0
+cleanup() {
+    [ -z "$TMP" ] || rm -f -- "$TMP"
+    [ -z "$VERIFY" ] || rm -f -- "$VERIFY"
+    if [ "$ESP_MOUNTED" -eq 1 ]; then
+        umount "$ESP_MOUNT" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+    printf 'omarchy m1n1 logo: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$(id -u)" -eq 0 ] || fail 'must run as root'
+[ -f "$BASE" ] || fail "missing packaged m1n1: $BASE"
+[ -r "$PAYLOAD" ] || fail "missing logo payload: $PAYLOAD"
+[ -x /usr/bin/update-m1n1 ] || fail 'missing /usr/bin/update-m1n1'
+
+size=$(stat -c '%s' -- "$PAYLOAD")
+[ "$size" -eq "$PAYLOAD_SIZE" ] || fail "invalid payload size: $size (expected $PAYLOAD_SIZE)"
+magic=$(dd if="$PAYLOAD" bs=1 count=16 status=none)
+[ "$magic" = "$MAGIC" ] || fail 'invalid logo payload header'
+
+install -d -o root -g root -m 0755 -- "$STATE"
+
+# Prefer a mounted system ESP. If it is not mounted, mount it privately so the
+# output can still be verified before it is unmounted.
+target=
+if mountpoint -q /boot/efi 2>/dev/null && [ -d /boot/efi/m1n1 ]; then
+    target=/boot/efi/m1n1/boot.bin
+elif mountpoint -q /boot 2>/dev/null && [ -d /boot/m1n1 ]; then
+    target=/boot/m1n1/boot.bin
+else
+    [ -r /usr/share/asahi-scripts/functions.sh ] || fail 'cannot locate Asahi ESP helper'
+    ESP_MOUNT=$(mktemp -d /run/omarchy-m1n1-logo.XXXXXX)
+    # shellcheck source=/dev/null
+    . /usr/share/asahi-scripts/functions.sh
+    mount_sys_esp "$ESP_MOUNT"
+    ESP_MOUNTED=1
+    target=$ESP_MOUNT/m1n1/boot.bin
+fi
+
+# Keep a one-time copy of the image before customization for recovery and
+# comparison. It is never overwritten by later package updates.
+if [ ! -e "$BACKUP" ] && [ -r "$target" ]; then
+    cp --preserve=timestamps -- "$target" "$BACKUP"
+    chmod 0600 -- "$BACKUP"
+fi
+
+# Do not alter the package-owned m1n1. Append the documented m1n1 custom-logo
+# payload to a root-owned copy instead.
+TMP=$(mktemp "$STATE/.m1n1-omarchy.bin.XXXXXX")
+cat -- "$BASE" "$PAYLOAD" > "$TMP"
+chown root:root -- "$TMP"
+chmod 0644 -- "$TMP"
+if [ -e "$CUSTOM" ] && cmp -s -- "$TMP" "$CUSTOM"; then
+    rm -f -- "$TMP"
+    TMP=
+else
+    mv -f -- "$TMP" "$CUSTOM"
+    TMP=
+fi
+
+M1N1="$CUSTOM" /usr/bin/update-m1n1 "$target"
+
+# Verify that the regenerated image starts with exactly the current packaged
+# m1n1 followed by the Omarchy payload.
+custom_size=$(stat -c '%s' -- "$CUSTOM")
+VERIFY=$(mktemp "$STATE/.verify.XXXXXX")
+dd if="$target" of="$VERIFY" bs=1 count="$custom_size" status=none
+cmp -s -- "$CUSTOM" "$VERIFY" || fail 'regenerated boot image failed logo verification'
+
+printf 'omarchy m1n1 logo: applied to %s\n' "$target"

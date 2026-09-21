@@ -1,0 +1,23 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/modules/*/dtbs/*
+Target = usr/lib/asahi-boot/*
+Target = usr/bin/update-m1n1
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = m1n1
+Target = uboot-asahi
+Target = linux-asahi
+Target = asahi-scripts
+
+[Action]
+Description = Applying Omarchy m1n1 boot logo...
+When = PostTransaction
+Depends = m1n1
+Depends = asahi-scripts
+Exec = /usr/local/libexec/omarchy-m1n1-logo-update
