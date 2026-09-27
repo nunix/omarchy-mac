@@ -1,0 +1,105 @@
+#!/bin/bash
+# Run a Windows exe from the Battle.net Proton prefix inside muvm (4K-page microVM)
+# with FEX. Keeps the VM alive until every Wine process exits, so launchers that
+# spawn and exit (Battle.net Launcher.exe) don't take their children down with it.
+#
+# Usage: muvm-proton-run [--no-mangohud] <exe> [args...]
+#
+# MangoHud (x86_64 build) is on by default; toggle it in-game with Shift_R+F12,
+# config in ~/.config/MangoHud/MangoHud.conf.
+#
+# Settings come from ~/.config/omarchy-battlenet/env (written by install.sh).
+
+set -e
+
+config="$HOME/.config/omarchy-battlenet/env"
+if [[ ! -f $config ]]; then
+  echo "Missing $config, run gaming/battlenet/install.sh first." >&2
+  exit 1
+fi
+source "$config"
+
+mangohud=1
+if [[ $1 == --no-mangohud ]]; then
+  mangohud=0
+  shift
+fi
+
+if [[ -z $1 ]]; then
+  echo "Usage: muvm-proton-run [--no-mangohud] <exe> [args...]" >&2
+  exit 1
+fi
+
+log_dir="$HOME/.local/state/omarchy-battlenet"
+mkdir -p "$log_dir"
+
+vm_script="$log_dir/muvm-proton-run-vm.sh"
+cat > "$vm_script.tmp" <<'VM'
+mangohud=$1
+shift
+source "$HOME/.config/omarchy-battlenet/env"
+# muvm doesn't forward output of commands attached to a running VM; log here.
+exec > "$HOME/.local/state/omarchy-battlenet/$(basename "$1" .exe | tr ' ' '-').vm.log" 2>&1
+# muvm writes the FEX rootfs location to /usr/share/fex-emu/Config.json, which
+# a FEX installed outside /usr doesn't read.
+export FEX_ROOTFS=/run/fex-emu/rootfs
+if [[ $mangohud == 1 ]]; then
+  export VK_ADD_IMPLICIT_LAYER_PATH="$OMARCHY_BATTLENET_OPT/mangohud/layers"
+  export MANGOHUD=1
+fi
+export STEAM_COMPAT_DATA_PATH="$BATTLENET_PREFIX"
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.local/share/Steam"
+export STEAM_COMPAT_APP_ID=1010101010
+cd "$(dirname "$1")"
+"$PROTON_DIR/proton" run "$@"
+WINEPREFIX="$BATTLENET_PREFIX/pfx" "$PROTON_DIR/files/bin/wineserver" -w
+VM
+# Replace atomically: a running VM's bash may still be reading the old file.
+mv -f "$vm_script.tmp" "$vm_script"
+
+# Battle.net closes to a tray icon (bridged to the bar below). If the VM is up
+# but nothing is visible: show the hidden Battle.net again when that's what was
+# asked for, attach for anything else, and only reset the VM when there's no
+# tray icon either (leftover Wine processes).
+proton_tray_item() {
+  busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher \
+    org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems 2>/dev/null |
+    grep -o ':1\.[0-9]*/StatusNotifierItem' | cut -d/ -f1 | while read -r service; do
+      if timeout 2 busctl --user get-property "$service" /StatusNotifierItem org.kde.StatusNotifierItem Id 2>/dev/null |
+        grep -q '"steam_proton"'; then
+        echo "$service"
+        break
+      fi
+    done
+}
+
+if pgrep -f "^muvm -- bash $vm_script" >/dev/null &&
+  ! hyprctl clients -j | jq -e '.[] | select(.class == "steam_proton" and .title != "")' >/dev/null; then
+  tray_item=$(proton_tray_item)
+  if [[ -n $tray_item && $(basename "$1") == "Battle.net Launcher.exe" ]]; then
+    busctl --user call "$tray_item" /StatusNotifierItem org.kde.StatusNotifierItem Activate ii 0 0
+    exit 0
+  elif [[ -z $tray_item ]]; then
+    muvm -- bash -c "WINEPREFIX='$BATTLENET_PREFIX/pfx' '$PROTON_DIR/files/bin/wineserver' -k" >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+      pgrep -f "^muvm -- bash $vm_script" >/dev/null || break
+      sleep 1
+    done
+    pkill -f "^muvm -- bash $vm_script" 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
+# Wine only speaks XEmbed for tray icons; bridge them to the bar's SNI tray.
+# Without it Wine shows its own small fallback tray window.
+if ! pgrep -x xembedsniproxy >/dev/null; then
+  setsid -f env DISPLAY="${DISPLAY:-:0}" QT_QPA_PLATFORM=xcb "$OMARCHY_BATTLENET_OPT/xembed-sni-proxy/bin/xembedsniproxy" \
+    > "$log_dir/xembedsniproxy.log" 2>&1 < /dev/null
+fi
+
+name=$(basename "$1" .exe | tr ' ' '-')
+# muvm registers the FEX binary it finds in PATH (FEXInterpreter in muvm 0.6.0,
+# FEX in later releases) when the VM starts. Put the patched build first so
+# both names resolve to it instead of the unpatched /usr/bin/FEX.
+export PATH="$OMARCHY_BATTLENET_OPT/fex/bin:$PATH"
+exec muvm -- bash "$vm_script" "$mangohud" "$@" > "$log_dir/$name.log" 2>&1

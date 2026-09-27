@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=WoW Forever
+GenericName=World of Warcraft
+Comment=World of Warcraft Forever (muvm + FEX + Proton)
+Exec=@HOME@/.local/bin/wow-forever
+Icon=wow-forever
+Terminal=false
+Categories=Game;
+StartupNotify=true
+StartupWMClass=steam_proton

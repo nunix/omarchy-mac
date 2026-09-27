@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Battle.net
+GenericName=Game Launcher
+Comment=Blizzard game launcher (muvm + FEX + Proton)
+Exec=@HOME@/.local/bin/battlenet
+Icon=battle-net
+Terminal=false
+Categories=Game;
+StartupNotify=true
+StartupWMClass=steam_proton

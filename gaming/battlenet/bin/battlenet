@@ -1,0 +1,7 @@
+#!/bin/bash
+# Launch Battle.net (updates, news, Play button). Its Chromium UI runs without
+# GPU acceleration; games launched from it still use the GPU.
+source "$HOME/.config/omarchy-battlenet/env"
+exec "$HOME/.local/bin/muvm-proton-run" \
+  "$BATTLENET_PREFIX/pfx/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe" \
+  --disable-gpu --disable-gpu-compositing

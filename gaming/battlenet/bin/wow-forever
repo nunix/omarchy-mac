@@ -1,0 +1,5 @@
+#!/bin/bash
+# Launch WoW Forever directly (log in on WoW's own login screen).
+source "$HOME/.config/omarchy-battlenet/env"
+exec "$HOME/.local/bin/muvm-proton-run" \
+  "$BATTLENET_PREFIX/pfx/drive_c/Program Files (x86)/World of Warcraft/_classic_beta_/WowB.exe"

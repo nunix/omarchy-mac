@@ -1,0 +1,98 @@
+diff --git i/CMakeLists.txt w/CMakeLists.txt
+index f0257cb..a34f270 100644
+--- i/CMakeLists.txt
++++ w/CMakeLists.txt
+@@ -12,6 +12,7 @@ set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+ include(ECMQtDeclareLoggingCategory)
+ include(KDEInstallDirs)
+ include(ECMConfiguredInstall)
++include(FeatureSummary)
+ 
+ find_package(KF6WindowSystem 6.6 REQUIRED)
+ 
+diff --git i/sniproxy.cpp w/sniproxy.cpp
+index 3d7aef4..4fe75ea 100644
+--- i/sniproxy.cpp
++++ w/sniproxy.cpp
+@@ -465,11 +465,17 @@ QString SNIProxy::Category() const
+ QString SNIProxy::Id() const
+ {
+     const auto title = Title();
+-    // we always need /some/ ID so if no window title exists, just use the winId.
+-    if (title.isEmpty()) {
+-        return QString::number(m_windowId);
++    if (!title.isEmpty()) {
++        return title;
+     }
+-    return title;
++    // Untitled icons (e.g. Wine's) get their WM_CLASS so the ID is stable
++    // across restarts and can be pinned; fall back to the winId otherwise.
++    KWindowInfo window(m_windowId, NET::Properties(), NET::WM2WindowClass);
++    const QString windowClass = QString::fromUtf8(window.windowClassClass());
++    if (!windowClass.isEmpty()) {
++        return windowClass;
++    }
++    return QString::number(m_windowId);
+ }
+ 
+ KDbusImageVector SNIProxy::IconPixmap() const
+@@ -504,6 +510,21 @@ int SNIProxy::WindowId() const
+ void SNIProxy::Activate(int x, int y)
+ {
+     sendClick(XCB_BUTTON_INDEX_1, x, y);
++
++    // Windows tray icons (via Wine/Proton) usually restore their window on a
++    // double-click, while SNI hosts send a single Activate. Turn it into a
++    // double-click; the clicks have to be spaced out or Wine won't pair them.
++    // The first double-click after the window was hidden gets swallowed, so
++    // send a second one; it's harmless when the window is already shown.
++    KWindowInfo window(m_windowId, NET::Properties(), NET::WM2WindowClass);
++    const QByteArray windowClass = window.windowClassClass().toLower();
++    if (windowClass.startsWith("steam_") || windowClass == "wine" || windowClass.endsWith(".exe")) {
++        for (int delay : {150, 600, 750}) {
++            QTimer::singleShot(delay, this, [this, x, y]() {
++                sendClick(XCB_BUTTON_INDEX_1, x, y);
++            });
++        }
++    }
+ }
+ 
+ void SNIProxy::SecondaryActivate(int x, int y)
+@@ -537,6 +558,13 @@ void SNIProxy::sendClick(uint8_t mouseButton, int x, int y)
+ 
+     qCDebug(SNIPROXY) << "Received click" << mouseButton << "with passed x*y" << x << y;
+ 
++    // The inject mode is guessed when the icon is embedded, but some clients
++    // (Wine) only select button events afterwards. Re-check so they get direct
++    // events instead of XTest, which doesn't reach them on every compositor.
++    if (m_injectMode == XTest && checkWindowOrDescendantWantButtonEvents(m_windowId)) {
++        m_injectMode = Direct;
++    }
++
+     auto c = m_x11Interface->connection();
+ 
+     auto cookieSize = xcb_get_geometry(c, m_windowId);
+@@ -572,6 +600,23 @@ void SNIProxy::sendClick(uint8_t mouseButton, int x, int y)
+         xcb_warp_pointer(c, XCB_NONE, m_windowId, 0, 0, 0, 0, clickPoint.x(), clickPoint.y());
+     }
+ 
++    // Some clients (Wine) ignore a click until the pointer has moved over
++    // them, so announce the pointer first.
++    if (m_injectMode == Direct) {
++        xcb_motion_notify_event_t motion;
++        memset(&motion, 0x00, sizeof(xcb_motion_notify_event_t));
++        motion.response_type = XCB_MOTION_NOTIFY;
++        motion.event = m_windowId;
++        motion.time = XCB_CURRENT_TIME;
++        motion.same_screen = 1;
++        motion.root = DefaultRootWindow(m_x11Interface->display());
++        motion.root_x = x;
++        motion.root_y = y;
++        motion.event_x = static_cast<int16_t>(clickPoint.x());
++        motion.event_y = static_cast<int16_t>(clickPoint.y());
++        xcb_send_event(c, false, m_windowId, XCB_EVENT_MASK_POINTER_MOTION, (char *)&motion);
++    }
++
+     // mouse down
+     if (m_injectMode == Direct) {
+         auto *event = new xcb_button_press_event_t;

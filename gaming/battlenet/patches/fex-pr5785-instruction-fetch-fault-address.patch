@@ -1,0 +1,238 @@
+From be54439cb22260ff68ec72a05cdfeb65bdfc326b Mon Sep 17 00:00:00 2001
+From: FrontMage <xbgxwh@outlook.com>
+Date: Fri, 24 Jul 2026 08:38:11 +0800
+Subject: [PATCH] FEXCore: Report instruction fetch fault address
+
+---
+ FEXCore/Source/Interface/Core/Frontend.cpp          |  5 +++++
+ FEXCore/Source/Interface/Core/Frontend.h            |  1 +
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp       |  3 +++
+ FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp  |  1 +
+ FEXCore/Source/Interface/Core/X86Tables/X86Tables.h |  1 +
+ FEXCore/Source/Interface/IR/IR.json                 |  1 +
+ FEXCore/Source/Interface/IR/IRDumper.cpp            |  3 ++-
+ FEXCore/include/FEXCore/Core/CoreState.h            |  2 ++
+ .../SignalDelegator/GuestFramesManagement.cpp       | 13 +++++++++++--
+ Source/Windows/ARM64EC/Module.cpp                   |  2 +-
+ Source/Windows/Common/Exception.h                   |  4 ++--
+ Source/Windows/WOW64/Module.cpp                     |  2 +-
+ unittests/FEXLinuxTests/Known_Failures              |  3 ---
+ 13 files changed, 31 insertions(+), 10 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index 78d5f1a2e..f70a0c8c1 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -101,6 +101,9 @@ bool Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
+     ExecutableRangeWritable = RangeInfo.Writable;
+ 
+     if (RangeInfo.Size == 0) {
++      if (NonExecutableAddress == 0) {
++        NonExecutableAddress = Address;
++      }
+       return false;
+     }
+ 
+@@ -1078,6 +1081,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
+   // Will be set if DecodeInstructionImpl tries to read non-executable memory
+   HitNonExecutableRange = false;
+   HitBadRelocation = false;
++  NonExecutableAddress = 0;
+   auto ErrorDuringDecoding = DecodeInstructionImpl(PC);
+ 
+   if (ErrorDuringDecoding != DecodedBlockStatus::SUCCESS || HitNonExecutableRange || HitBadRelocation) [[unlikely]] {
+@@ -1085,6 +1089,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
+     // Error while decoding instruction. We don't know the table or instruction size
+     const auto InstSize = DecodeInst->InstSize;
+     DecodeInst->TableInfo = nullptr;
++    DecodeInst->FaultAddress = NonExecutableAddress;
+     DecodeInst->InstSize = 0;
+ 
+     // A decode error can be caused by substituting zero for an inaccessible
+diff --git a/FEXCore/Source/Interface/Core/Frontend.h b/FEXCore/Source/Interface/Core/Frontend.h
+index 1fc0e6ed3..28bb0ae6c 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.h
++++ b/FEXCore/Source/Interface/Core/Frontend.h
+@@ -152,6 +152,7 @@ private:
+   uint64_t ExecutableRangeEnd {};
+   bool ExecutableRangeWritable {};
+   bool HitNonExecutableRange {};
++  uint64_t NonExecutableAddress {};
+   bool HitBadRelocation {};
+ 
+   struct DecodeStream {
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 6e8df9553..b90c3c231 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -76,6 +76,9 @@ DEF_OP(Break) {
+   LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Constant);
+   str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData));
+ 
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Op->Reason.FaultAddress);
++  str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultAddress));
++
+   switch (Op->Reason.Signal) {
+   case Core::FAULT_SIGILL:
+     ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.GuestSignal_SIGILL));
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+index 8dc605ca7..23ce1c3e6 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -5194,6 +5194,7 @@ void OpDispatchBuilder::NoExecOp(OpcodeArgs) {
+                 .Signal = Core::FAULT_SIGSEGV,
+                 .TrapNumber = X86State::X86_TRAPNO_PF,
+                 .si_code = 2, // SEGV_ACCERR
++                .FaultAddress = Op->FaultAddress,
+               });
+ }
+ 
+diff --git a/FEXCore/Source/Interface/Core/X86Tables/X86Tables.h b/FEXCore/Source/Interface/Core/X86Tables/X86Tables.h
+index 3010516f6..93f8b5781 100644
+--- a/FEXCore/Source/Interface/Core/X86Tables/X86Tables.h
++++ b/FEXCore/Source/Interface/Core/X86Tables/X86Tables.h
+@@ -226,6 +226,7 @@ struct DecodedOperand {
+ 
+ struct DecodedInst {
+   uint64_t PC;
++  uint64_t FaultAddress;
+ 
+   DecodedOperand Dest;
+   DecodedOperand Src[3];
+diff --git a/FEXCore/Source/Interface/IR/IR.json b/FEXCore/Source/Interface/IR/IR.json
+index 172d62dd7..a0fe820f8 100644
+--- a/FEXCore/Source/Interface/IR/IR.json
++++ b/FEXCore/Source/Interface/IR/IR.json
+@@ -124,6 +124,7 @@
+     "  uint8_t Signal;",
+     "  uint8_t TrapNumber;",
+     "  uint8_t si_code;",
++    "  uint64_t FaultAddress;",
+     "};"
+   ],
+   "IRTypes" : {
+diff --git a/FEXCore/Source/Interface/IR/IRDumper.cpp b/FEXCore/Source/Interface/IR/IRDumper.cpp
+index 31ecddc9e..25ec42514 100644
+--- a/FEXCore/Source/Interface/IR/IRDumper.cpp
++++ b/FEXCore/Source/Interface/IR/IRDumper.cpp
+@@ -323,7 +323,8 @@ static void PrintArg(fextl::ostringstream* out, const IRListView*, FEXCore::IR::
+   *out << "{" << Arg.ErrorRegister << ".";
+   *out << static_cast<uint32_t>(Arg.Signal) << ".";
+   *out << static_cast<uint32_t>(Arg.TrapNumber) << ".";
+-  *out << static_cast<uint32_t>(Arg.si_code) << "}";
++  *out << static_cast<uint32_t>(Arg.si_code) << ".";
++  *out << fmt::format("0x{:x}", Arg.FaultAddress) << "}";
+ }
+ 
+ static void PrintArg(fextl::ostringstream* out, const IRListView*, ShiftType Arg) {
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index 80514bfdc..038e86000 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -427,6 +427,7 @@ struct CpuStateFrame {
+     uint16_t err_code;
+     uint16_t _pad : 16;
+   } SynchronousFaultData;
++  uint64_t SynchronousFaultAddress {};
+ 
+   InternalThreadState* Thread;
+ 
+@@ -447,4 +448,5 @@ static_assert(std::is_standard_layout<CpuStateFrame>::value, "This needs to be s
+ static_assert(sizeof(CpuStateFrame::SynchronousFaultData) == 8, "This needs to be 8 bytes");
+ static_assert(alignof(CpuStateFrame::SynchronousFaultDataStruct) == 8, "This needs to be 8 bytes");
+ static_assert(offsetof(CpuStateFrame, SynchronousFaultData) % 8 == 0, "This needs to be aligned");
++static_assert(offsetof(CpuStateFrame, SynchronousFaultAddress) % 8 == 0, "This needs to be aligned");
+ } // namespace FEXCore::Core
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator/GuestFramesManagement.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator/GuestFramesManagement.cpp
+index 2401fe496..8ce49f666 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator/GuestFramesManagement.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator/GuestFramesManagement.cpp
+@@ -438,7 +438,11 @@ uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thr
+ 
+     // Overwrite si_code and si_addr
+     guest_siginfo->si_code = Thread->CurrentFrame->SynchronousFaultData.si_code;
+-    guest_siginfo->si_addr = reinterpret_cast<void*>(ContextBackup->OriginalRIP);
++    const bool IsGeneratedPageFault = Frame->SynchronousFaultData.Signal == FEXCore::Core::FAULT_SIGSEGV &&
++                                      Frame->SynchronousFaultData.TrapNo == FEXCore::X86State::X86_TRAPNO_PF;
++    const uint64_t FaultAddress =
++      IsGeneratedPageFault && Frame->SynchronousFaultAddress ? Frame->SynchronousFaultAddress : ContextBackup->OriginalRIP;
++    guest_siginfo->si_addr = reinterpret_cast<void*>(FaultAddress);
+     Signal = Frame->SynchronousFaultData.Signal;
+   } else {
+     guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_TRAPNO] = ConvertSignalToTrapNo(Signal, HostSigInfo);
+@@ -790,7 +794,12 @@ uint64_t SignalDelegator::SetupRTFrame_ia32(FEXCore::Core::InternalThreadState*
+   case SigInfoLayout::LAYOUT_FAULT:
+     // Macro expansion to get the si_addr
+     // This is the address trying to be accessed, not the RIP
+-    guest_uctx->info._sifields._sigfault.addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(HostSigInfo->si_addr));
++    if (ContextBackup->FaultToTopAndGeneratedException && Frame->SynchronousFaultData.Signal == FEXCore::Core::FAULT_SIGSEGV &&
++        Frame->SynchronousFaultData.TrapNo == FEXCore::X86State::X86_TRAPNO_PF && Frame->SynchronousFaultAddress) {
++      guest_uctx->info._sifields._sigfault.addr = static_cast<uint32_t>(Frame->SynchronousFaultAddress);
++    } else {
++      guest_uctx->info._sifields._sigfault.addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(HostSigInfo->si_addr));
++    }
+     break;
+   case SigInfoLayout::LAYOUT_FAULT_RIP:
+     // Macro expansion to get the si_addr
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 93a3ab098..ee6da10a1 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -502,7 +502,7 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
+ 
+   BOOL FirstChance = TRUE;
+-  EXCEPTION_RECORD GuestRec = FEX::Windows::HandleGuestException(Fault, Rec, GuestContext.Pc, GuestContext.X8, GuestContext.X0, FirstChance);
++  EXCEPTION_RECORD GuestRec = FEX::Windows::HandleGuestException(Fault, Thread->CurrentFrame->SynchronousFaultAddress, Rec, GuestContext.Pc, GuestContext.X8, GuestContext.X0, FirstChance);
+   if (GuestRec.ExceptionCode == EXCEPTION_SINGLE_STEP) {
+     GuestContext.Cpsr &= ~(1 << 21); // PSTATE.SS
+   } else if (GuestRec.ExceptionCode == EXCEPTION_BREAKPOINT) {
+diff --git a/Source/Windows/Common/Exception.h b/Source/Windows/Common/Exception.h
+index 12162233c..c32db0b11 100644
+--- a/Source/Windows/Common/Exception.h
++++ b/Source/Windows/Common/Exception.h
+@@ -10,7 +10,7 @@
+ 
+ namespace FEX::Windows {
+ template<typename TReg>
+-static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault,
++static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault, uint64_t FaultAddress,
+                                                     const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax, TReg Cx, BOOL& FirstChance) {
+   EXCEPTION_RECORD Dst = Src;
+   Dst.ExceptionAddress = reinterpret_cast<void*>(Rip);
+@@ -78,7 +78,7 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
+       // A page-fault raised by an explicit break in JIT code is always an execute fault
+       Dst.NumberParameters = 2;
+       Dst.ExceptionInformation[0] = EXCEPTION_EXECUTE_FAULT;
+-      Dst.ExceptionInformation[1] = Rip;
++      Dst.ExceptionInformation[1] = FaultAddress ? FaultAddress : Rip;
+       return Dst;
+     default: LogMan::Msg::EFmt("Unknown SIGSEGV trap: {}", Fault.TrapNo); break;
+     }
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 8eb1acb86..9fdd541f4 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -789,7 +789,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+   BOOL FirstChance = TRUE;
+   EXCEPTION_RECORD GuestException =
+-    FEX::Windows::HandleGuestException(Fault, *Exception, WowContext->Eip, WowContext->Eax, WowContext->Ecx, FirstChance);
++    FEX::Windows::HandleGuestException(Fault, Thread->CurrentFrame->SynchronousFaultAddress, *Exception, WowContext->Eip, WowContext->Eax, WowContext->Ecx, FirstChance);
+   if (GuestException.ExceptionCode == EXCEPTION_SINGLE_STEP) {
+     WowContext->EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
+   }
+diff --git a/unittests/FEXLinuxTests/Known_Failures b/unittests/FEXLinuxTests/Known_Failures
+index 689a15a91..9fcd3dd23 100644
+--- a/unittests/FEXLinuxTests/Known_Failures
++++ b/unittests/FEXLinuxTests/Known_Failures
+@@ -23,6 +23,3 @@ sigtest_sigmask.64
+ # Disabled since FEX's FaultSafeMemcpy is intentionally stub-implemented
+ syscalls_efault.32
+ syscalls_efault.64
+-
+-# partial instruction decode is known to fail
+-noexec_protect.64
+-- 
+2.55.0
+
