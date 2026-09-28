@@ -31,6 +31,9 @@ Item {
   property string doneFile: ""
   property string filterText: ""
   property var doneFilesToRelease: []
+  // True while a row's own video is playing full-screen over the picker
+  // (see startPreview()); the picker itself stays mapped underneath.
+  property bool previewing: false
   // Themes open from rows the shell already holds, so the picker shows without
   // waiting on omarchy-theme-switcher; each open refreshes them behind it.
   property string themeRows: ""
@@ -78,6 +81,25 @@ Item {
   function currentPath() {
     if (imageArray.length === 0 || !itemMatches(selectedIndex)) return ""
     return imageArray[selectedIndex].filePath
+  }
+
+  function videoPathForCurrent() {
+    if (imageArray.length === 0 || !itemMatches(selectedIndex)) return ""
+    return imageArray[selectedIndex].videoPath || ""
+  }
+
+  function startPreview() {
+    if (root.previewing) return
+    var video = videoPathForCurrent()
+    if (!video) return
+
+    // Same app-id as omarchy-boot-intro so this reuses that fullscreen window
+    // rule (default/hypr/apps/system.lua) instead of needing its own.
+    previewProc.command = ["bash", "-c",
+      "mpv --force-window=immediate --fs --ontop --no-border --no-osc --osd-level=0 " +
+      "--really-quiet --wayland-app-id=org.omarchy.boot-intro --title=omarchy-preview " + Util.shellQuote(video)]
+    root.previewing = true
+    previewProc.running = true
   }
 
   function nameForPath(path) {
@@ -456,6 +478,14 @@ Item {
     onExited: root.releaseNextDoneFile()
   }
 
+  Process {
+    id: previewProc
+    onExited: {
+      root.previewing = false
+      root.focusPicker()
+    }
+  }
+
   PanelWindow {
     id: panel
 
@@ -468,10 +498,13 @@ Item {
     screen: root.targetScreen
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    mask: root.opened ? null : closedMask
+    // A video preview (startPreview()) parks the picker the same way closing
+    // it does -- below other windows, input-less -- so mpv paints over it and
+    // gets keyboard focus, without tearing down the picker's own state.
+    mask: root.opened && !root.previewing ? null : closedMask
     WlrLayershell.namespace: "omarchy-image-selector"
-    WlrLayershell.layer: root.opened ? WlrLayer.Overlay : WlrLayer.Bottom
-    WlrLayershell.keyboardFocus: root.opened && root.imagesLoaded ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    WlrLayershell.layer: root.opened && !root.previewing ? WlrLayer.Overlay : WlrLayer.Bottom
+    WlrLayershell.keyboardFocus: root.opened && root.imagesLoaded && !root.previewing ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
 
     Region { id: closedMask }
@@ -531,6 +564,9 @@ Item {
               event.accepted = true
             } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Tab) {
               root.selectAdjacent(1)
+              event.accepted = true
+            } else if (event.key === Qt.Key_Space && root.videoPathForCurrent()) {
+              root.startPreview()
               event.accepted = true
             } else if (root.filterable && event.text && event.text.length === 1 && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127 && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)) {
               root.updateFilter(root.filterText + event.text)
@@ -644,6 +680,35 @@ Item {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 onClicked: item.selected ? root.applySelected() : root.select(index)
+              }
+
+              readonly property string videoPath: item.selected && imageData ? (imageData.videoPath || "") : ""
+
+              Rectangle {
+                visible: item.videoPath !== ""
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 16
+                width: 56
+                height: 56
+                radius: 28
+                color: Util.alpha(root.dimColor, 0.55)
+                border.color: root.selectedBorder
+                border.width: 2
+
+                Text {
+                  anchors.centerIn: parent
+                  anchors.horizontalCenterOffset: 2
+                  text: "▶"
+                  color: root.foreground
+                  font.pixelSize: 20
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.startPreview()
+                }
               }
             }
           }

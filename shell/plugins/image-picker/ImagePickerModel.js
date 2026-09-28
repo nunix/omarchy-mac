@@ -2,6 +2,12 @@ function nameForPath(path) {
   return String(path || "").split("/").pop().replace(/\.[^/.]+$/, "")
 }
 
+// Same extension set list.sh and omarchy-menu-images already treat as video
+// when deciding whether to run ffmpegthumbnailer instead of vipsthumbnail.
+function isVideoPath(path) {
+  return /\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(path || ""))
+}
+
 function labelForPath(path) {
   return nameForPath(path).replace(/[-_]+/g, " ").replace(/\b\w/g, function(match) { return match.toUpperCase() })
 }
@@ -26,7 +32,10 @@ function loadRows(rows) {
     images.push({
       filePath: path,
       fileName: fileName,
-      thumbnailPath: columns[1] || path
+      thumbnailPath: columns[1] || path,
+      // A row whose own file is a video (e.g. a theme's preview.mp4, or a
+      // boot-intro's intro.mp4) can be played back, not just thumbnailed.
+      videoPath: isVideoPath(path) ? path : ""
     })
   }
 
@@ -86,6 +95,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     nameForPath: nameForPath,
     labelForPath: labelForPath,
+    isVideoPath: isVideoPath,
     loadRows: loadRows,
     itemMatches: itemMatches,
     firstMatchingIndex: firstMatchingIndex,

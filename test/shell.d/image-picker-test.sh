@@ -17,19 +17,25 @@ const rows = [
   '/themes/a/gruvbox-dark.jpeg',
   '',
   '\t/cache/no-path.jpg',
-  '/themes/a/plain'
+  '/themes/a/plain',
+  '/intros/fire.mp4\t/cache/fire.jpg'
 ].join('\n')
 
 const images = picker.loadRows(rows)
 assertDeepEqual(
   images,
   [
-    { filePath: '/themes/a/nord-river.png', fileName: 'nord-river.png', thumbnailPath: '/cache/nord-river.jpg' },
-    { filePath: '/themes/a/gruvbox-dark.jpeg', fileName: 'gruvbox-dark.jpeg', thumbnailPath: '/themes/a/gruvbox-dark.jpeg' },
-    { filePath: '/themes/a/plain', fileName: 'plain', thumbnailPath: '/themes/a/plain' }
+    { filePath: '/themes/a/nord-river.png', fileName: 'nord-river.png', thumbnailPath: '/cache/nord-river.jpg', videoPath: '' },
+    { filePath: '/themes/a/gruvbox-dark.jpeg', fileName: 'gruvbox-dark.jpeg', thumbnailPath: '/themes/a/gruvbox-dark.jpeg', videoPath: '' },
+    { filePath: '/themes/a/plain', fileName: 'plain', thumbnailPath: '/themes/a/plain', videoPath: '' },
+    { filePath: '/intros/fire.mp4', fileName: 'fire.mp4', thumbnailPath: '/cache/fire.jpg', videoPath: '/intros/fire.mp4' }
   ],
   'image picker parses rows and dedupes by file name'
 )
+
+assert(picker.isVideoPath('/intros/fire.mp4'), 'image picker recognizes a video extension')
+assert(picker.isVideoPath('/themes/a/preview.WEBM'), 'image picker matches video extensions case-insensitively')
+assert(!picker.isVideoPath('/themes/a/preview.png'), 'image picker does not flag a still image as video')
 
 assert(picker.itemMatches(images, 0, 'river'), 'image picker matches file names')
 assert(picker.itemMatches(images, 1, 'Gruvbox Dark'), 'image picker matches labels case-insensitively')
@@ -70,9 +76,29 @@ assert(
   'image picker leaves theme mode when another caller opens it'
 )
 assert(
-  /PanelWindow \{[\s\S]*?visible: true[\s\S]*?mask: root\.opened \? null : closedMask[\s\S]*?WlrLayershell\.layer: root\.opened \? WlrLayer\.Overlay : WlrLayer\.Bottom/.test(imagePickerQml) &&
+  /PanelWindow \{[\s\S]*?visible: true[\s\S]*?mask: root\.opened && !root\.previewing \? null : closedMask[\s\S]*?WlrLayershell\.layer: root\.opened && !root\.previewing \? WlrLayer\.Overlay : WlrLayer\.Bottom/.test(imagePickerQml) &&
     /Region \{ id: closedMask \}/.test(imagePickerQml),
-  'image picker keeps its surface mapped, parked input-less below windows while closed'
+  'image picker keeps its surface mapped, parked input-less below windows while closed or previewing'
+)
+assert(
+  /function videoPathForCurrent\(\) \{[\s\S]*?return imageArray\[selectedIndex\]\.videoPath \|\| ""/.test(imagePickerQml),
+  'image picker reads videoPath from the selected row'
+)
+assert(
+  /function startPreview\(\) \{[\s\S]*?if \(root\.previewing\) return[\s\S]*?var video = videoPathForCurrent\(\)[\s\S]*?if \(!video\) return[\s\S]*?root\.previewing = true[\s\S]*?previewProc\.running = true/.test(imagePickerQml),
+  'image picker only starts a preview when the selected row has a video'
+)
+assert(
+  /id: previewProc[\s\S]*?onExited: \{[\s\S]*?root\.previewing = false[\s\S]*?root\.focusPicker\(\)/.test(imagePickerQml),
+  'image picker returns focus to the carousel when a preview ends'
+)
+assert(
+  /event\.key === Qt\.Key_Space && root\.videoPathForCurrent\(\)\) \{\s*root\.startPreview\(\)/.test(imagePickerQml),
+  'image picker plays the selected row\'s video on Space'
+)
+assert(
+  /WlrLayershell\.keyboardFocus: root\.opened && root\.imagesLoaded && !root\.previewing \? WlrKeyboardFocus\.Exclusive/.test(imagePickerQml),
+  'image picker releases keyboard focus to the preview player while previewing'
 )
 assert(
   /function openSelector[\s\S]*?targetScreen = focusedScreen\(\) \|\| targetScreen/.test(imagePickerQml) &&

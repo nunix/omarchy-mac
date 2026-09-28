@@ -52,8 +52,18 @@ and customization schema.
 ## Image picker
 
 Fullscreen image-grid selector overlay. Used by `omarchy-menu-images`
-(wallpaper picker) and `omarchy-theme-switcher` (theme picker) and any
-other caller that wants to present a directory of images with previews.
+(wallpaper picker), `omarchy-theme-switcher` (theme picker),
+`omarchy-intro-switcher` (boot-intro picker), and any other caller that
+wants to present a directory of images with previews.
+
+A row whose own file is a video (a theme's `preview.mp4`, a boot-intro's
+`intro.mp4`) still gets a still thumbnail via `list.sh`/`omarchy-menu-images`
+(`ffmpegthumbnailer`), but can also be played back: pressing Space on it, or
+the ▶ button on the expanded card, plays it full-screen with `mpv` and
+returns to the picker when it ends (or `q` is pressed). `videoPath` in
+`ImagePickerModel.loadRows` is what flags a row as playable; it's empty for
+every other row, so this is a no-op everywhere a caller's rows are plain
+images.
 
 Two ways to drive it:
 
