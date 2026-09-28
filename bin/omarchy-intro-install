@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# omarchy:summary=Install a boot-intro from a git repository
+# omarchy:args=[git-repo-url]
+# omarchy:examples=omarchy intro install https://github.com/example/omarchy-example-intro.git
+
+if [[ -z $1 ]]; then
+  REPO_URL=$(gum input --placeholder="Git repo URL (https or git@host:org/repo.git)" --header="")
+else
+  REPO_URL="$1"
+fi
+
+if [[ -z $REPO_URL ]]; then
+  exit 1
+fi
+
+# Refuse a URL that names a git option or a transport helper before cloning.
+# Shared with omarchy-theme-install and omarchy-plugin-add.
+omarchy-git-url-check "$REPO_URL" || exit 1
+
+INTROS_DIR="$HOME/.config/omarchy/intros"
+
+# Strip user@host: prefix from scp-style SSH URLs so basename sees just the
+# path, same reasoning as omarchy-theme-install.
+REPO_PATH="$REPO_URL"
+[[ $REPO_PATH != *"://"* && $REPO_PATH == *:* && ${REPO_PATH%%:*} != */* ]] && REPO_PATH="${REPO_PATH#*:}"
+INTRO_NAME=$(basename -- "$REPO_PATH" .git | sed -E 's/^omarchy-//; s/-intro$//' | tr '[:upper:]' '[:lower:]')
+INTRO_PATH="$INTROS_DIR/$INTRO_NAME"
+
+# The name comes from the URL, is joined into a path that is about to be
+# removed, and then names a directory passed around by name (the
+# ~/Videos/intro.mp4 symlink, the picker's --selected argument). Held to a
+# safe character set for the same reasons as omarchy-theme-install's THEME_NAME.
+if ! (LC_ALL=C; [[ $INTRO_NAME =~ ^[a-z0-9_][a-z0-9._+-]*$ ]]); then
+  echo "Error: '$REPO_URL' does not give a usable intro name."
+  exit 1
+fi
+
+if [[ -d $INTRO_PATH ]]; then
+  rm -rf "$INTRO_PATH"
+fi
+
+if ! git clone -- "$REPO_URL" "$INTRO_PATH"; then
+  echo "Error: Failed to clone intro repo."
+  exit 1
+fi
+
+if [[ ! -f $INTRO_PATH/intro.mp4 ]]; then
+  echo "Error: '$REPO_URL' does not contain an intro.mp4"
+  rm -rf "$INTRO_PATH"
+  exit 1
+fi
+
+omarchy-intro-set "$INTRO_NAME"

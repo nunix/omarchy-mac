@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# omarchy:summary=Set the boot-intro video
+# omarchy:args=<intro-name>
+# omarchy:examples=omarchy intro set "Fire" | omarchy intro set fire
+
+INTROS_DIR="$HOME/.config/omarchy/intros"
+STATE_DIR="$HOME/.local/state/omarchy/current"
+INTRO_LINK="$HOME/Videos/intro.mp4"
+
+if [[ -z $1 ]]; then
+  echo "Usage: omarchy-intro-set <intro-name>"
+  exit 1
+fi
+
+INTRO_NAME=$(echo "$1" | sed -E 's/<[^>]+>//g' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+
+if [[ -z $INTRO_NAME || $INTRO_NAME == .* || $INTRO_NAME == */* ]]; then
+  echo "Invalid intro name: $1"
+  exit 1
+fi
+
+INTRO_DIR="$INTROS_DIR/$INTRO_NAME"
+
+if [[ ! -f $INTRO_DIR/intro.mp4 ]]; then
+  echo "Intro '$INTRO_NAME' does not exist"
+  exit 1
+fi
+
+mkdir -p "$STATE_DIR" "$HOME/Videos"
+ln -sf "$INTRO_DIR/intro.mp4" "$INTRO_LINK"
+echo "$INTRO_NAME" >"$STATE_DIR/intro.name"

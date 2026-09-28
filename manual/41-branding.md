@@ -44,6 +44,14 @@ omarchy transcode ascii ~/logo.svg ~/.config/omarchy/branding/screensaver.txt --
 
 It takes `--width` and `--height` in terminal columns and rows, a `--mode` of either `braille` (the default, and much finer) or `block`, a `--threshold` percentage for deciding which pixels count as part of the logo, and `--invert` for when your logo is light on a dark background. If a conversion comes out as a blob, the threshold is usually the knob to turn.
 
+### Boot Intro
+
+Omarchy can play a short video full-screen right after login, before the desktop appears — pick one under _Style > Boot Intro_. There's nothing installed by default; install one from a git repo with `omarchy intro install <url>` (the same pattern as `omarchy theme install`), which clones it to `~/.config/omarchy/intros/<name>/` and sets it as active. `omarchy intro list` shows what's installed, `omarchy intro set <name>` switches between them, and `omarchy intro current` shows which one is active.
+
+While picking one, highlight it and press Space (or click the ▶ that appears on the expanded card) to play it full-screen before committing — press `q`, or just let it finish, to return to the picker.
+
+A repo just needs an `intro.mp4` at its root; add a `README.md` and a `make-intro.py` (or whatever generated it) if you want others to be able to see how it was made and regenerate it themselves. Two examples to install directly or use as a starting point: [omarchy-fire-intro](https://github.com/nunix/omarchy-fire-intro) (a burning wordmark) and [omarchy-zen-water-intro](https://github.com/nunix/omarchy-zen-water-intro) (ink rising from ripples on water, with a short licensed music excerpt).
+
 ### Words instead of a logo
 
 `omarchy ascii` draws text in Delta Corps Priest 1, the FIGlet font the Omarchy wordmark itself is drawn in, so a screensaver can say something rather than show a picture:

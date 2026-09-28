@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# omarchy:summary=Open the boot-intro picker
+# omarchy:examples=intro=$(omarchy-intro-switcher); [[ -n $intro ]] && omarchy-intro-set "$intro"
+
+INTROS_PATH="$HOME/.config/omarchy/intros"
+CACHE_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/intro-selector"
+preview_dir="$CACHE_PATH/previews"
+
+mkdir -p "$preview_dir"
+rm -f "$preview_dir"/*
+
+# Symlinked into one flat dir, named by slug: every intro's own file is
+# literally called intro.mp4, and the picker names a row after its file, not
+# its parent directory. list.sh/omarchy-menu-images already thumbnail and
+# (via ImagePickerModel's videoPath) offer video rows for full-motion preview.
+while IFS= read -r intro_path; do
+  intro_name=${intro_path##*/}
+  video="$intro_path/intro.mp4"
+  [[ -f $video ]] && ln -sf "$video" "$preview_dir/$intro_name.mp4"
+done < <(find -L "$INTROS_PATH" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort)
+
+current_intro=$(cat "$HOME/.local/state/omarchy/current/intro.name" 2>/dev/null)
+selected_video=""
+[[ -e $preview_dir/$current_intro.mp4 ]] && selected_video="$preview_dir/$current_intro.mp4"
+
+exec omarchy-menu-images --print-name --show-labels --filterable --lazy-thumbnails \
+  --selected "$selected_video" "$preview_dir"

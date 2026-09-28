@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# omarchy:summary=Show current boot-intro
+# omarchy:examples=omarchy intro current
+
+INTRO_NAME_PATH="$HOME/.local/state/omarchy/current/intro.name"
+
+if [[ -f $INTRO_NAME_PATH ]]; then
+  sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g' "$INTRO_NAME_PATH"
+else
+  echo "None"
+fi

@@ -34,6 +34,12 @@ o.window("org.omarchy.screensaver", { fullscreen = true })
 o.window("org.omarchy.screensaver", { float = true })
 o.window("org.omarchy.screensaver", { animation = "slide" })
 
+-- Fullscreen boot-intro, both at login (omarchy-boot-intro) and when the
+-- picker plays a video preview (omarchy-intro-switcher, via the image-picker
+-- plugin) -- instantly and without animation so the desktop never flashes
+-- between whatever was behind it and the video.
+o.window("org.omarchy.boot-intro", { fullscreen = true, no_anim = true })
+
 -- No transparency on media windows.
 o.window(
   "^(zoom|vlc|mpv|org.kde.kdenlive|com.obsproject.Studio|com.github.PintaProject.Pinta|imv|org.gnome.NautilusPreviewer)$",

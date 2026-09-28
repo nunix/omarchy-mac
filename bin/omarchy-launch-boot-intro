@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# omarchy:summary=Play the boot-intro video, if one is set
+
+# Plays ~/Videos/intro.mp4 (symlinked there by omarchy-intro-set) fullscreen.
+# Runs unconditionally from autostart at login (a no-op when no intro is
+# installed), but can also be run directly to preview the current one.
+# Press q to skip.
+INTRO="$HOME/Videos/intro.mp4"
+[[ -f $INTRO ]] || exit 0
+
+# Hide the top bar for the same window the video covers, restoring it however
+# this exits (video ends, is skipped with q, or mpv errors out) -- unless the
+# user had already hidden it themselves, in which case leave it hidden.
+BAR_ALREADY_OFF="$HOME/.local/state/omarchy/toggles/bar-off"
+was_bar_off=false
+[[ -f $BAR_ALREADY_OFF ]] && was_bar_off=true
+omarchy-toggle-bar on
+$was_bar_off || trap 'omarchy-toggle-bar off' EXIT
+
+# --force-window=immediate maps a black window before the first frame is
+# decoded, so the desktop is never visible behind it. The org.omarchy.boot-intro
+# class picks up the fullscreen window rule in default/hypr/apps/system.lua,
+# shared with the picker's own preview (omarchy-intro-switcher via the
+# image-picker plugin).
+mpv --force-window=immediate --wayland-app-id=org.omarchy.boot-intro \
+  --fs --ontop --no-border --no-osc --osd-level=0 --really-quiet \
+  --background=color --background-color=#000000 \
+  --title=boot-intro --volume=80 \
+  "$INTRO" >/dev/null 2>&1
