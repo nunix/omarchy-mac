@@ -46,11 +46,11 @@ It takes `--width` and `--height` in terminal columns and rows, a `--mode` of ei
 
 ### Boot Intro
 
-Omarchy can play a short video full-screen right after login, before the desktop appears — pick one under _Style > Boot Intro_. There's nothing installed by default; install one from a git repo with `omarchy intro install <url>` (the same pattern as `omarchy theme install`), which clones it to `~/.config/omarchy/intros/<name>/` and sets it as active. `omarchy intro list` shows what's installed, `omarchy intro set <name>` switches between them, and `omarchy intro current` shows which one is active.
+Omarchy can play a short video full-screen right after login, before the desktop appears — pick one under _Style > Boot Intro_. There's nothing installed by default; install one from a git repo with `omarchy intro install <url> [subdir]` (the same pattern as `omarchy theme install`, plus an optional subdirectory for a repo that holds more than one intro), which clones it to `~/.config/omarchy/intros/<name>/` and sets it as active. `omarchy intro list` shows what's installed, `omarchy intro set <name>` switches between them, and `omarchy intro current` shows which one is active.
 
 While picking one, highlight it and press Space (or click the ▶ that appears on the expanded card) to play it full-screen before committing — press `q`, or just let it finish, to return to the picker.
 
-A repo just needs an `intro.mp4` at its root; add a `README.md` and a `make-intro.py` (or whatever generated it) if you want others to be able to see how it was made and regenerate it themselves. Two examples to install directly or use as a starting point: [omarchy-fire-intro](https://github.com/nunix/omarchy-fire-intro) (a burning wordmark) and [omarchy-zen-water-intro](https://github.com/nunix/omarchy-zen-water-intro) (ink rising from ripples on water, with a short licensed music excerpt).
+A repo just needs an `intro.mp4` at its root (or, for a repo holding several, at `<subdir>/intro.mp4`); add a `README.md` and a `make-intro.py` (or whatever generated it) if you want others to be able to see how it was made and regenerate it themselves. [omarchy-intros](https://github.com/nunix/omarchy-intros) has two examples to install directly or use as a starting point: `fire` (a burning wordmark) and `zen-water` (ink rising from ripples on water, with a short licensed music excerpt) — e.g. `omarchy intro install https://github.com/nunix/omarchy-intros.git fire`.
 
 ### Words instead of a logo
 

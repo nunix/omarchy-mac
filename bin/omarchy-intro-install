@@ -1,14 +1,16 @@
 #!/bin/bash
 
 # omarchy:summary=Install a boot-intro from a git repository
-# omarchy:args=[git-repo-url]
+# omarchy:args=[git-repo-url] [subdir]
 # omarchy:examples=omarchy intro install https://github.com/example/omarchy-example-intro.git
+# omarchy:examples=omarchy intro install https://github.com/example/omarchy-intros.git fire
 
 if [[ -z $1 ]]; then
   REPO_URL=$(gum input --placeholder="Git repo URL (https or git@host:org/repo.git)" --header="")
 else
   REPO_URL="$1"
 fi
+SUBDIR="$2"
 
 if [[ -z $REPO_URL ]]; then
   exit 1
@@ -20,35 +22,64 @@ omarchy-git-url-check "$REPO_URL" || exit 1
 
 INTROS_DIR="$HOME/.config/omarchy/intros"
 
-# Strip user@host: prefix from scp-style SSH URLs so basename sees just the
-# path, same reasoning as omarchy-theme-install.
-REPO_PATH="$REPO_URL"
-[[ $REPO_PATH != *"://"* && $REPO_PATH == *:* && ${REPO_PATH%%:*} != */* ]] && REPO_PATH="${REPO_PATH#*:}"
-INTRO_NAME=$(basename -- "$REPO_PATH" .git | sed -E 's/^omarchy-//; s/-intro$//' | tr '[:upper:]' '[:lower:]')
+if [[ -n $SUBDIR ]]; then
+  # A single repo can hold several intros as subdirectories (e.g.
+  # omarchy-intros/fire, omarchy-intros/zen-water). Reject anything that
+  # could climb out of the clone before it's ever used as a path.
+  if [[ $SUBDIR == /* || $SUBDIR == *..* ]]; then
+    echo "Error: '$SUBDIR' is not a usable subdirectory."
+    exit 1
+  fi
+  INTRO_NAME=$(basename -- "$SUBDIR" | tr '[:upper:]' '[:lower:]')
+else
+  # Strip user@host: prefix from scp-style SSH URLs so basename sees just the
+  # path, same reasoning as omarchy-theme-install.
+  REPO_PATH="$REPO_URL"
+  [[ $REPO_PATH != *"://"* && $REPO_PATH == *:* && ${REPO_PATH%%:*} != */* ]] && REPO_PATH="${REPO_PATH#*:}"
+  INTRO_NAME=$(basename -- "$REPO_PATH" .git | sed -E 's/^omarchy-//; s/-intro$//' | tr '[:upper:]' '[:lower:]')
+fi
+
 INTRO_PATH="$INTROS_DIR/$INTRO_NAME"
 
-# The name comes from the URL, is joined into a path that is about to be
-# removed, and then names a directory passed around by name (the
+# The name comes from the URL (or the subdir), is joined into a path that is
+# about to be removed, and then names a directory passed around by name (the
 # ~/Videos/intro.mp4 symlink, the picker's --selected argument). Held to a
 # safe character set for the same reasons as omarchy-theme-install's THEME_NAME.
 if ! (LC_ALL=C; [[ $INTRO_NAME =~ ^[a-z0-9_][a-z0-9._+-]*$ ]]); then
-  echo "Error: '$REPO_URL' does not give a usable intro name."
+  echo "Error: '$REPO_URL${SUBDIR:+/$SUBDIR}' does not give a usable intro name."
   exit 1
 fi
 
-if [[ -d $INTRO_PATH ]]; then
-  rm -rf "$INTRO_PATH"
-fi
+if [[ -n $SUBDIR ]]; then
+  CLONE_DIR=$(mktemp -d)
+  trap 'rm -rf "$CLONE_DIR"' EXIT
 
-if ! git clone -- "$REPO_URL" "$INTRO_PATH"; then
-  echo "Error: Failed to clone intro repo."
-  exit 1
-fi
+  if ! git clone --depth 1 -- "$REPO_URL" "$CLONE_DIR"; then
+    echo "Error: Failed to clone intro repo."
+    exit 1
+  fi
 
-if [[ ! -f $INTRO_PATH/intro.mp4 ]]; then
-  echo "Error: '$REPO_URL' does not contain an intro.mp4"
-  rm -rf "$INTRO_PATH"
-  exit 1
+  if [[ ! -f $CLONE_DIR/$SUBDIR/intro.mp4 ]]; then
+    echo "Error: '$SUBDIR' in '$REPO_URL' does not contain an intro.mp4"
+    exit 1
+  fi
+
+  [[ -d $INTRO_PATH ]] && rm -rf "$INTRO_PATH"
+  mkdir -p "$INTROS_DIR"
+  cp -r -- "$CLONE_DIR/$SUBDIR" "$INTRO_PATH"
+else
+  [[ -d $INTRO_PATH ]] && rm -rf "$INTRO_PATH"
+
+  if ! git clone -- "$REPO_URL" "$INTRO_PATH"; then
+    echo "Error: Failed to clone intro repo."
+    exit 1
+  fi
+
+  if [[ ! -f $INTRO_PATH/intro.mp4 ]]; then
+    echo "Error: '$REPO_URL' does not contain an intro.mp4"
+    rm -rf "$INTRO_PATH"
+    exit 1
+  fi
 fi
 
 omarchy-intro-set "$INTRO_NAME"
