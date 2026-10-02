@@ -68,6 +68,7 @@ kernel-modules-hook
 lazydocker
 lazygit
 less
+libimobiledevice
 libsecret
 libvips
 libyaml
@@ -136,6 +137,7 @@ ufw
 ufw-docker
 unzip
 usage
+usbmuxd
 uwsm
 vi
 whois
