@@ -23,7 +23,7 @@ No service needs enabling: `usbmuxd` ships a udev rule that starts it on demand.
 Software cannot do these steps for you:
 
 1. Install the packages: `sudo pacman -S --needed libimobiledevice usbmuxd` (or run `omarchy update` on this branch).
-2. Unplug the iPhone, then plug it back in with a data-capable USB cable (some charge-only cables will not work).
+2. **Unplug the iPhone and plug it back in** with a data-capable USB cable (some charge-only cables will not work). This replug is required even if the phone was already connected: `usbmuxd` is started by a udev event when the phone is plugged in, so a phone connected before the install is not seen (`idevicepair` says "No device found").
 3. Unlock the iPhone and tap **Trust** on the "Trust This Computer?" prompt, then enter the passcode.
 4. On the iPhone: **Settings > Personal Hotspot > Allow Others to Join**.
 5. A new wired connection (interface like `enp…u…`) should appear in NetworkManager. Check the Omarchy network menu or run `nmcli device`.
@@ -40,6 +40,7 @@ ping -c3 archlinux.org
 
 ## Troubleshooting
 
+- **`No device found` right after installing**: replug the phone. Starting `usbmuxd` by hand is not needed.
 - **Trust prompt never appears**: try another cable or port, then `sudo systemctl restart usbmuxd`, replug.
 - **`idevicepair` says "Please accept the trust dialog"**: unlock the phone and tap Trust, then rerun.
 - **Interface exists but no IP**: toggle Personal Hotspot off and on, or `nmcli device connect <iface>`.
