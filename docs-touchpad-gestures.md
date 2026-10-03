@@ -69,3 +69,25 @@ udevadm info --query=property --name=/dev/input/event7 \
 Do not edit `/usr/share/libinput/` or `/usr/share/omarchy/`; package updates overwrite those files. If palm filtering remains inadequate, investigate a device-specific libinput quirk rather than adding another gesture daemon.
 
 These settings do not change pointer sensitivity, so they remain suitable for high-DPI/Retina displays.
+
+## Installing the overrides
+
+The ready-to-use files live in `personal/hypr/`. Copy them into your user config:
+
+```sh
+mkdir -p ~/.config/hypr/scripts
+install -m755 personal/hypr/scripts/workspace-carousel ~/.config/hypr/scripts/workspace-carousel
+cat personal/hypr/input.lua >> ~/.config/hypr/input.lua
+hyprctl reload
+hyprctl configerrors
+```
+
+Then check `hyprctl getoption input:touchpad:natural_scroll` reports `true`, and swipe three fingers left and right to move through the carousel. Natural scrolling applies to both vertical and horizontal two-finger scrolling.
+
+## Agent prompt
+
+To have a coding agent apply this on a fresh install, give it:
+
+```text
+Set up Mac-like touchpad behavior on this Omarchy install using the files in personal/hypr/ of this repo. Enable natural scrolling (vertical and horizontal) and disable_while_typing in ~/.config/hypr/input.lua. Add three-finger left/right gestures with reversed directions (swipe left = next workspace) that run ~/.config/hypr/scripts/workspace-carousel asynchronously (trailing "&", never a synchronous hyprctl call from the callback). Install the carousel script, executable, in ~/.config/hypr/scripts/. Do not edit /usr/share/omarchy or the packaged defaults. Run hyprctl reload and hyprctl configerrors, then verify the options and that the script switches workspaces.
+```
